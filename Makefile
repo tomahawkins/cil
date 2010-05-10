@@ -1,11 +1,18 @@
-FRAMAC_SHARE  :=$(shell frama-c.byte -print-path)
-FRAMAC_LIBDIR :=$(shell frama-c.byte -print-libpath)
-PLUGIN_NAME = DumpCIL
-PLUGIN_CMO  = dump_cil
+.PHONY: all
+all: Language/CIL.hs
 
-include $(FRAMAC_SHARE)/Makefile.dynamic
+Language/CIL.hs: Language/CIL.DrIFT.hs
+	DrIFT Language/CIL.DrIFT.hs > Language/CIL.hs
 
-.PHONY:clean-all
+test: Test.hs Language/CIL.hs
+	ghc --make -W -fglasgow-exts -o test Test.hs
+
+.PHONY: clean
+clean:
+	-rm *.o *.hi
+	-rm Language/*.o Language/*.hi
+	-rm test
+
+.PHONY: clean-all
 clean-all: clean
-	-rm -f .depend
-	-rm -f $(FRAMAC_LIBDIR)/DumpCIL.*
+	-rm Language/CIL.hs
