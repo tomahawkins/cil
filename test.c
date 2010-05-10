@@ -1,3 +1,5 @@
+#pragma JessieIntegerModel(modulo)
+#pragma JessieFloatModel(math)
 //@ ensures \result;
-int f() {return 0;}
+int f() { static int a = 1; return a++;}
 
