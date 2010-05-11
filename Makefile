@@ -16,6 +16,7 @@ clean:
 	-rm Language/*.o Language/*.hi
 	-rm test
 	-rm ciltypes
+	-rm cil_types_nocomments.mli
 
 .PHONY: clean-all
 clean-all: clean
