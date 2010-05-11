@@ -6,38 +6,54 @@ open List
 
 let error loc msg = prerr_endline ("ERROR: " ^ msg); exit 1
 
-let unknown =
-  { pos_fname = "unknown"
-  ; pos_lnum = 0
-  ; pos_bol  = 0
-  ; pos_cnum = 0
-  }
+let list a = if length a == 0 then "[]" else "[" ^ String.concat ", " a ^ "]"
 
-let format_fundec _ _ = "function declaration"
+let string a = "\"" ^ a ^ "\"" (*XXX Need to process meta chars. *)
+
+let unknown_location =
+  let a = { pos_fname = "unknown"
+          ; pos_lnum = 0
+          ; pos_bol  = 0
+          ; pos_cnum = 0
+          }
+  in (a, a)
+
+let format_fundec _ = "Fundec"
+
+let format_location (a, _) = "Location" ^ " " ^ string a.pos_fname
+                                        ^ " " ^ string_of_int a.pos_lnum
+                                        ^ " " ^ string_of_int (a.pos_cnum - a.pos_bol + 1)
+
+let unknown_global loc = "UnknownGlobal (" ^ format_location loc ^ ")"
 
 let format_global a = match a with
-    GType        (a, loc)    -> "typedef"
-  | GCompTag     (a, loc)    -> "struct-union definition"
-  | GCompTagDecl (a, loc)    -> "struct-union declaration"
-  | GEnumTag     (a, loc)    -> "enum definition"
-  | GEnumTagDecl (a, loc)    -> "enum declaration"
-  | GVarDecl     (f, v, loc) -> "variable declaration"
-  | GVar         (v, i, loc) -> "variable definition"
-  | GFun         (a, loc)    -> format_fundec a loc
-  | GAsm         (_, loc)    -> error loc "asm not supported"
-  | GPragma      (a, loc)    -> ""
-  | GText        _           -> "text"
-  | GAnnot       _           -> "annot"
+    GType        (a, loc)    -> unknown_global loc
+  | GCompTag     (a, loc)    -> unknown_global loc
+  | GCompTagDecl (a, loc)    -> unknown_global loc
+  | GEnumTag     (a, loc)    -> unknown_global loc
+  | GEnumTagDecl (a, loc)    -> unknown_global loc
+  | GVarDecl     (f, v, loc) -> unknown_global loc
+  | GVar         (v, i, loc) -> unknown_global loc
+  | GFun         (a, loc)    -> "GFun (" ^ format_fundec a ^ ") (" ^ format_location loc ^ ")"
+  | GAsm         (_, loc)    -> unknown_global loc
+  | GPragma      (a, loc)    -> unknown_global loc
+  | GText        _           -> unknown_global unknown_location
+  | GAnnot       (_, loc)    -> unknown_global loc
 
-let dump file =
-  (match file.globinit with
-    None   -> ()
-  | Some f -> error unknown "initializer not supported");
-  iter (fun a -> if String.length a == 0 then () else print_endline a) (map format_global file.globals)
+
+let format_file file =
+  let globals = map format_global file.globals in
+  "File"
+  ^ " " ^ string file.fileName
+  ^ " " ^ list (map format_global file.globals)
+  ^ " " ^ (match file.globinit with
+            None   -> "Nothing"
+          | Some f -> "(Just (" ^ format_fundec f ^ "))")
+  ^ " " ^ (if file.globinitcalled then "True" else "False")
 
 let run () =
   File.init_from_cmdline ();
-  dump (Ast.get ())
+  print_endline (format_file (Ast.get ()))
 
 module Self =
   Plugin.Register

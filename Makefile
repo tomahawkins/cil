@@ -2,7 +2,7 @@
 all: Language/CIL.hs
 
 Language/CIL.hs: Language/CIL.DrIFT.hs
-	DrIFT Language/CIL.DrIFT.hs > Language/CIL.hs
+	DrIFT-cabalized -o Language/CIL.hs Language/CIL.DrIFT.hs
 
 test: Test.hs Language/CIL.hs
 	ghc --make -W -fglasgow-exts -o test Test.hs
