@@ -22,9 +22,9 @@ data Token
   | ParenRight
   | BraceLeft
   | BraceRight
-  | Constructor String
-  | Variable    String
-  | Parameter   String
+  | TConstructor String
+  | TVariable    String
+  | TParameter   String
   deriving (Show, Eq)
 
 lexer :: String -> [Token]
@@ -50,10 +50,10 @@ lexer = map t . filter (/= "mutable") . filter (not . null) . concatMap split . 
     ")"    -> ParenRight
     "{"    -> BraceLeft
     "}"    -> BraceRight
-    '\'':a -> Parameter a
+    '\'':a -> TParameter a
     a | elem '.' a -> t $ tail $ dropWhile (/= '.') a
-    a:b    | isUpper a -> Constructor (a : b)
-           | otherwise -> Variable    (a : b)
+    a:b    | isUpper a -> TConstructor (a : b)
+           | otherwise -> TVariable    (a : b)
     a      -> error $ "unexpected string: " ++ a
 
 decomment :: String -> String
@@ -68,18 +68,21 @@ decomment = decomment' 0
   decomment' n (a:b) = (if n > 0 && a /= '\n' then ' ' else a) : decomment' n b
 
 data Type
-  = Sum    TypeName
-  | Record TypeName
-  | Tuple  TypeName
+  = Sum    TypeName [(String, [TypeRef])]
+  | Record TypeName [(String, TypeRef)]
+  | Alias  TypeName TypeRef
   deriving (Show, Eq)
 
 data TypeName = TypeName String [String] deriving (Show, Eq) -- TypeName name params
 
-data TypeExpr = TypeExpr deriving (Show, Eq)
+data TypeRef
+  = ApplyVariable  String TypeRef
+  | ApplyParameter String TypeRef
+  deriving (Show, Eq)
 
 type OCaml = Parser Token
 
-parseOCaml :: String -> [()]
+parseOCaml :: String -> [Type]
 parseOCaml a = case runParser (many typeDef `discard` eof) $ lexer a of
   (Left msg, remaining) -> error $ msg ++ "\nremaining tokens: " ++ show (take 30 $ remaining) ++ " ..."
   (Right a, []) -> a
@@ -90,42 +93,44 @@ tok a = satisfy (== a) >> return ()
 
 parameter :: OCaml String
 parameter = do
-  a <- satisfy (\ a -> case a of { Parameter _ -> True; _ -> False })
+  a <- satisfy (\ a -> case a of { TParameter _ -> True; _ -> False })
   case a of
-    Parameter s -> return s
+    TParameter s -> return s
     _ -> undefined
 
 constructor :: OCaml String
 constructor = do
-  a <- satisfy (\ a -> case a of { Constructor _ -> True; _ -> False })
+  a <- satisfy (\ a -> case a of { TConstructor _ -> True; _ -> False })
   case a of
-    Constructor s -> return s
+    TConstructor s -> return s
     _ -> undefined
 
 variable :: OCaml String
 variable = do
-  a <- satisfy (\ a -> case a of { Variable _ -> True; _ -> False })
+  a <- satisfy (\ a -> case a of { TVariable _ -> True; _ -> False })
   case a of
-    Variable s -> return s
+    TVariable s -> return s
     _ -> undefined
 
-typeDef :: OCaml ()
-typeDef = do { tok Type; typeName; tok Eq; typeExpr; return () }
+typeDef :: OCaml Type
+typeDef = do { tok Type; n <- typeName; tok Eq; typeExpr n }
 
-typeName :: OCaml ()
+typeName :: OCaml TypeName
 typeName = oneOf
-  [ do { tok ParenLeft; parameter; tok Comma; parameter; many (tok Comma >> parameter); tok ParenRight; variable; return () }
-  , do { parameter; variable; return () }
-  , do { variable; return () }
+  [ do { tok ParenLeft; p1 <- parameter; tok Comma; p2 <- parameter; ps <- many (tok Comma >> parameter); tok ParenRight; n <- variable; return $ TypeName n (p1:p2:ps) }
+  , do { p <- parameter; n <- variable; return $ TypeName n [p] }
+  , do { n <- variable; return $ TypeName n [] }
   ]
 
-varOrParam :: OCaml ()
-varOrParam = oneOf [variable >> return (), parameter >> return ()]
+data VariableParameter = Var String | Param String
 
-varOrParams :: OCaml ()
-varOrParams = do { varOrParam >> many varOrParam >> return () }
+varOrParam :: OCaml VariableParameter
+varOrParam = oneOf [variable >>= return . Var, parameter >>= return . Param]
 
-typeRef :: OCaml ()
+varOrParams :: OCaml [VariableParameter]
+varOrParams = do { a <- varOrParam; b <- many varOrParam;  return $ a : b }
+
+typeRef :: OCaml TypeRef
 typeRef = oneOf
   [ do { tok ParenLeft; varOrParams; tok Comma; varOrParams; many (tok Comma >> varOrParams); tok ParenRight; varOrParams; return () }
   , do { tok ParenLeft; typeRef; tok ParenRight; typeRef }
@@ -134,30 +139,26 @@ typeRef = oneOf
   , do { varOrParams }
   ]
 
-typeExpr :: OCaml ()
-typeExpr = oneOf [recordType, sumType, typeRef]
+typeExpr :: TypeName -> OCaml Type
+typeExpr n = oneOf
+  [ recordType >>= return . Record n
+  , sumType    >>= return . Sum    n
+  , typeRef    >>= return . Alias  n
+  ]
 
-recordType :: OCaml ()
-recordType = do
-  tok BraceLeft
-  f  <- recordField
-  fs <- many (tok SemiColon >> recordField)
-  optional $ tok SemiColon
-  tok BraceRight
+recordType :: OCaml [(String, TypeRef)]
+recordType = do { tok BraceLeft; f  <- recordField; fs <- many (tok SemiColon >> recordField); optional $ tok SemiColon; tok BraceRight; return $ f : fs }
 
-recordField :: OCaml ()
-recordField = do
-  variable
-  tok Colon
-  typeRef
+recordField :: OCaml (String, TypeRef)
+recordField = do { n <- variable; tok Colon; t <- typeRef; return (n, t) }
 
-sumType :: OCaml ()
-sumType = optional (tok Pipe) >> sumConstructor >> many (tok Pipe >> sumConstructor) >> return ()
+sumType :: OCaml [(String, [TypeRef])]
+sumType = do { optional (tok Pipe); a <- sumConstructor; b <- many (tok Pipe >> sumConstructor); return $ a : b }
  
-sumConstructor :: OCaml ()
+sumConstructor :: OCaml (String, [TypeRef])
 sumConstructor = oneOf
-  [ do { constructor; tok Of; typeRef; tok Star; typeRef; many (tok Star >> typeRef); return () }
-  , do { constructor; tok Of; typeRef; return () }
-  , constructor >> return ()
+  [ do { n <- constructor; tok Of; a <- typeRef; tok Star; b <- typeRef; c <- many (tok Star >> typeRef); return (n, a:b:c) }
+  , do { n <- constructor; tok Of; a <- typeRef; return (n, [a]) }
+  , do { n <- constructor; return (n, []) }
   ]
 
