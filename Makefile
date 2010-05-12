@@ -17,6 +17,8 @@ clean:
 	-rm test
 	-rm ciltypes
 	-rm cil_types_nocomments.mli
+	-rm dump_cil.ml
+	-rm CIL.hs
 
 .PHONY: clean-all
 clean-all: clean

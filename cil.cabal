@@ -22,6 +22,8 @@ cabal-version: >= 1.6
 extra-source-files:
   dumpcil/dump_cil.ml
   dumpcil/Makefile
+  cil_types.mli
+  CILTypes.hs
 
 library
     build-depends:

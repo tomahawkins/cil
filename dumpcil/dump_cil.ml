@@ -58,16 +58,16 @@ let run () =
 module Self =
   Plugin.Register
     (struct
-      let name = "DumpCIL"
-      let shortname = "DumpCIL"
-      let descr = "Dumps CIL and ACSL to stdout."
+      let name = "dumpcil"
+      let shortname = "dumpcil"
+      let descr = "Dumps CIL and ACSL to stdout to be read by Haskell cil."
     end);;
 
 module Enabled =
   Self.False
     (struct
       let option_name = "-dumpcil"
-      let descr = "Dumps CIL and ACSL to stdout."
+      let descr = "Dumps CIL and ACSL to stdout to be read by Haskell cil."
     end);;
 
 let () = Db.Main.extend (fun () -> if Enabled.get () then run ())
