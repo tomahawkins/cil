@@ -2,24 +2,26 @@
 module Main (main) where
 
 import Data.Char
+import Data.List
 import Text.ParserCombinators.Poly.Plain
+import Text.Printf
 
 main :: IO ()
 main = do
   f <- readFile "cil_types.mli"
   writeFile "cil_types_nocomments.mli" $ decomment f
   let types = parseOCaml f
-  writeFile "CIL.hs"      $ haskellCIL    types
-  writeFile "dump_cil.ml" $ dumpcilPlugin types
+  writeFile "CIL.hs"              $ haskellCIL    types
+  writeFile "dumpcil/dump_cil.ml" $ dumpcilPlugin types
 
 
 -- OCaml type types.
 
 -- Type definitions.
 data Type
-  = Sum    TypeName [(String, [TypeRef])]
-  | Record TypeName [(String, TypeRef)]
-  | Alias  TypeName TypeRef
+  = Sum    [(String, [TypeRef])]
+  | Record [(String, TypeRef)]
+  | Alias  TypeRef
   deriving (Show, Eq)
 
 --- Type definition name with parameters.
@@ -36,15 +38,85 @@ data VarParam = Var String | Param String deriving (Show, Eq)
 
 
 
+cap :: String -> String
+cap [] = []
+cap (a:b) = toUpper a : b
 
+uncap :: String -> String
+uncap [] = []
+uncap (a:b) = toLower a : b
+
+isAlias :: Type -> Bool
+isAlias (Alias _) = True
+isAlias _         = False
 
 -- Haskell CIL module generation.
-haskellCIL :: [Type] -> String
-haskellCIL types = ""
+haskellCIL :: [(TypeName, Type)] -> String
+haskellCIL types = unlines
+  [ "-- | A Haskell interface to OCaml's CIL library, via Frama-C, providing both a simplied C AST and the ACSL specification language."
+  , "module Language.CIL"
+  , "  ( parseC"
+  , unlines [ printf "  , %-26s %s" (cap name) (if isAlias t then "" else "(..)")  | (TypeName name _, t) <- types ]
+  , "  )"
+  , "  where"
+  , ""
+  , "import System.Exit"
+  , "import System.Process"
+  -- , "import Text.Parse"
+  , ""
+  , "-- | Parse a C compilation unit (file)."
+  , "parseC :: FilePath -> IO File"
+  , "parseC file = do"
+  , "  (exitCode, out, err) <- readProcessWithExitCode \"frama-c\" [\"-dumpcil\", file] \"\""
+  , "  let code = unlines $ tail $ lines out"
+  , "  case exitCode of"
+  , "    ExitSuccess -> return $ read code"
+  , "    ExitFailure _ -> putStrLn err >> exitWith exitCode"
+  , ""
+  -- {-
+  -- case exitCode of
+  --   ExitSuccess -> case runParser parse code of
+  --     (Left s,  a)  -> putStrLn ("parse error: " ++ s ++ "\n" ++ code ++ "\n" ++ a) >> exitFailure
+  --     (Right f, _) ->  return f
+  --   ExitFailure _ -> putStrLn err >> exitWith exitCode
+  -- -}
+  , "data Exn = Exn " ++ derives
+  , "data Position = Position FilePath Int Int " ++ derives
+  , "data Int64 = Int64 " ++ derives
+  , ""
+  , unlines [ printf "%s %s %s = %s %s" (if isAlias t then "type" else "data") (cap name) (intercalate " " params) (fType name t) (if isAlias t then "" else derives) | (TypeName name params, t) <- types ] 
+  ]
+  where
+  derives = "deriving (Show, Read, Eq) {-! derive : Parse !-}"
+  fType :: String -> Type -> String
+  fType name t = case t of
+    Sum    constructors -> intercalate " | " [ constructorName name ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ] | (name, args) <- constructors ]
+    Record fields -> printf "%s { %s }" (cap name) $ intercalate ", " [ printf "%s :: %s" field (fTypeRef tr) | (field, tr) <- fields ]
+    Alias  tr     -> fTypeRef tr
+
+  constructorName :: String -> String
+  constructorName a = case a of
+    "Block"   -> "Block'"
+    "True"    -> "True'"
+    "False"   -> "False'"
+    "Nothing" -> "Nothing'"
+    a         -> cap a
+
+  fTypeRef :: TypeRef -> String
+  fTypeRef a = case a of
+    Apply a []   -> name a
+    Apply (Var "list")   [a] -> "[" ++ fTypeRef a ++ "]"
+    Apply (Var "option") [a] -> "Maybe (" ++ fTypeRef a ++ ")"
+    Apply (Var "ref")    [a] -> fTypeRef a
+    Apply a args -> name a ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ]
+    Tuple args   -> "(" ++ intercalate ", " (map fTypeRef args) ++ ")"
+    where
+    name (Var n)   = cap n
+    name (Param n) = n
 
 
 -- Frama-C 'dumpcil' plugin generation.
-dumpcilPlugin :: [Type] -> String
+dumpcilPlugin :: [(TypeName, Type)] -> String
 dumpcilPlugin types = unlines
   [ "open Ast"
   , "open Cil_types"
@@ -195,7 +267,7 @@ decomment = decomment' 0
 
 type OCaml a = Parser Token a
 
-parseOCaml :: String -> [Type]
+parseOCaml :: String -> [(TypeName, Type)]
 parseOCaml a = case runParser (many typeDef `discard` eof) $ lexer a of
   (Left msg, remaining) -> error $ msg ++ "\nremaining tokens: " ++ show (take 30 $ remaining) ++ " ..."
   (Right a, []) -> a
@@ -225,8 +297,8 @@ variable = do
     Variable s -> return s
     _ -> undefined
 
-typeDef :: OCaml Type
-typeDef = do { tok Type; n <- typeName; tok Eq; typeExpr n }
+typeDef :: OCaml (TypeName, Type)
+typeDef = do { tok Type; n <- typeName; tok Eq; e <- typeExpr; return (n, e) }
 
 typeName :: OCaml TypeName
 typeName = oneOf
@@ -255,11 +327,11 @@ typeRef = oneOf
   apply args [a] = Apply a args
   apply args (a:b) = apply [(apply args [a])] b
 
-typeExpr :: TypeName -> OCaml Type
-typeExpr n = oneOf
-  [ recordType >>= return . Record n
-  , sumType    >>= return . Sum    n
-  , typeRef    >>= return . Alias  n
+typeExpr :: OCaml Type
+typeExpr = oneOf
+  [ recordType >>= return . Record
+  , sumType    >>= return . Sum
+  , typeRef    >>= return . Alias
   ]
 
 recordType :: OCaml [(String, TypeRef)]
