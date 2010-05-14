@@ -59,6 +59,7 @@ haskellCIL types = unlines
   [ "-- | A Haskell interface to OCaml's CIL library, via Frama-C, providing both a simplied C AST and the ACSL specification language."
   , "module Language.CIL"
   , "  ( parseC"
+  , "  , debugParseC"
   , "  , installPlugin"
   , unlines [ printf "  , %-26s %s" (cap name) (if isAlias t then "" else "(..)")  | (TypeName name _, t) <- types ]
   , "  )"
@@ -76,6 +77,12 @@ haskellCIL types = unlines
   , "  case exitCode of"
   , "    ExitSuccess -> return $ read code"
   , "    ExitFailure _ -> putStrLn err >> exitWith exitCode"
+  , ""
+  , "-- | Prints output from frama-c -dumpcil."
+  , "debugParseC :: FilePath -> IO ()"
+  , "debugParseC file = do"
+  , "  (exitCode, out, err) <- readProcessWithExitCode \"frama-c\" [\"-dumpcil\", file] \"\""
+  , "  putStrLn out"
   , ""
   -- {-
   -- case exitCode of
@@ -143,6 +150,8 @@ dumpcilPlugin types = unlines
   , "open String"
   , ""
   , "let list f a = \"[\" ^ concat \", \" (map f a) ^ \"]\""
+  , "let string a = \"\\\"\" ^ a ^ \"\\\"\" (* XXX Doesn't handle '\\' or '\"' chars in string. *)"
+  , "let position t = \"Position \\\"\" ^ t.pos_fname ^ \"\\\" \" ^ string_of_int t.pos_lnum ^ \" \" ^ string_of_int (t.pos_cnum - t.pos_bol + 1)"
   , ""
   , "let rec " ++ intercalate "\nand " (map fType types)
   , ""
@@ -173,23 +182,30 @@ dumpcilPlugin types = unlines
     --Sum constructors -> "match t with " ++ intercalate " | " [ name ++ (if null args then "" else " (" ++ intercalate ", " [ ] (
     --Record
     Alias t -> fTypeRef "t" t
-    _ -> show "XXX"
+    _ -> show "XXX fType"
 
   fTypeRef :: String -> TypeRef -> String
   fTypeRef m a = case a of
-    Apply a [] -> match (name a) [("a", "a")]
+    Apply a [] -> name a ++ " " ++ m
     --Apply (Var "list")   [a] -> show $ "[" ++ fTypeRef a ++ "]"
-    Apply (Var "option") [a] -> match m [("None", show "Nothing"), ("Some a", show "Just" ++ " ^ (" ++ fTypeRef "a" a ++ ")")]
+    Apply (Var "option") [a] -> match' [("None", show "Nothing"), ("Some a", show "Just" ++ " ^ (" ++ fTypeRef "a" a ++ ")")]
     Apply (Var "ref")    [a] -> fTypeRef m a
     --Apply a args -> name a ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ]
-    --Tuple args   -> "(" ++ intercalate ", " (map fTypeRef args) ++ ")"
-    _ -> show "XXX"
+    Tuple args -> match' [("(" ++ intercalate ", " [ "a" ++ show i | i <- [1 .. length args] ] ++ ")", metaGroup $ intercalate " ^ \",\" ^ " [ fTypeRef ("a" ++ show i) a | (a, i) <- zip args [1..] ])]
+    _ -> show "XXX fTypeRef"
     where
     name (Var n)   = n
     name (Param n) = n
+    match' = match m
 
   match :: String -> [(String, String)] -> String
-  match expr matches = "(match " ++ expr ++ " with " ++ intercalate " | " [ a ++ " -> " ++ b | (a, b) <- matches ] ++ ")"
+  match expr matches = group $ "match " ++ expr ++ " with " ++ intercalate " | " [ a ++ " -> " ++ b | (a, b) <- matches ]
+
+  group :: String -> String
+  group a = "(" ++ a ++ ")"
+
+  metaGroup :: String -> String
+  metaGroup a = "\"(\" ^ " ++ a ++ " ^ \")\""
 
 
 -- | Makefile used to install the dumpcil plugin.

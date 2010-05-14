@@ -4,7 +4,6 @@ import Language.CIL
 
 main :: IO ()
 main = do
-  installPlugin
-  f <- parseC "test.c"
+  f <- debugParseC "test.c"
   print f
 

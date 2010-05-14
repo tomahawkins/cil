@@ -9,14 +9,14 @@ Language/CIL.hs: CIL.hs
 
 #DrIFT-cabalized -o Language/CIL.hs CIL.hs
 
+.PHONY: test
 test: Test.hs Language/CIL.hs
-	ghc --make -W -fglasgow-exts -o test Test.hs
+	runhaskell -W Test.hs
 
 .PHONY: clean
 clean:
 	-rm *.o *.hi
 	-rm Language/*.o Language/*.hi
-	-rm test
 	-rm cil_types_nocomments.mli
 	-rm CIL.hs
 	-rm -r Language
