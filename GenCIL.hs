@@ -3,6 +3,7 @@ module Main (main) where
 
 import Data.Char
 import Data.List
+import System.Process
 import Text.ParserCombinators.Poly.Plain
 import Text.Printf
 
@@ -11,14 +12,16 @@ main = do
   f <- readFile "cil_types.mli"
   writeFile "cil_types_nocomments.mli" $ decomment f
   let types = parseOCaml f
-  writeFile "CIL.hs"              $ haskellCIL    types
-  writeFile "dumpcil/dump_cil.ml" $ dumpcilPlugin types
+  system "mkdir -p install-dumpcil-plugin"
+  writeFile "install-dumpcil-plugin/Makefile"    $ dumpcilMakefile
+  writeFile "install-dumpcil-plugin/dump_cil.ml" $ dumpcilPlugin types
+  writeFile "CIL.hs" $ haskellCIL types
 
 
 -- OCaml type types.
 
 -- Type definitions.
-data Type
+data TypeDef
   = Sum    [(String, [TypeRef])]
   | Record [(String, TypeRef)]
   | Alias  TypeRef
@@ -46,16 +49,17 @@ uncap :: String -> String
 uncap [] = []
 uncap (a:b) = toLower a : b
 
-isAlias :: Type -> Bool
+isAlias :: TypeDef -> Bool
 isAlias (Alias _) = True
 isAlias _         = False
 
 -- Haskell CIL module generation.
-haskellCIL :: [(TypeName, Type)] -> String
+haskellCIL :: [(TypeName, TypeDef)] -> String
 haskellCIL types = unlines
   [ "-- | A Haskell interface to OCaml's CIL library, via Frama-C, providing both a simplied C AST and the ACSL specification language."
   , "module Language.CIL"
   , "  ( parseC"
+  , "  , installPlugin"
   , unlines [ printf "  , %-26s %s" (cap name) (if isAlias t then "" else "(..)")  | (TypeName name _, t) <- types ]
   , "  )"
   , "  where"
@@ -80,6 +84,19 @@ haskellCIL types = unlines
   --     (Right f, _) ->  return f
   --   ExitFailure _ -> putStrLn err >> exitWith exitCode
   -- -}
+  , " -- | Installs Frama-C '-dumpcil' plugin."
+  , "installPlugin :: IO ()"
+  , "installPlugin = do"
+  , "  putStrLn \"creating install-dumpcil-plugin directory for plugin compiling and installation ...\""
+  , "  system \"mkdir -p install-dumpcil-plugin\""
+  , "  writeFile \"install-dumpcil-plugin/Makefile\" " ++ show dumpcilMakefile
+  , "  writeFile \"install-dumpcil-plugin/dump_cil.ml\" " ++ show (dumpcilPlugin types)
+  , "  putStrLn \"running 'make' to compile dumpcil plugin ...\""
+  , "  system \"cd install-dumpcil-plugin && make\""
+  , "  putStrLn \"running 'make install' to install dumpcil plugin ...\""
+  , "  system \"cd install-dumpcil-plugin && make install\""
+  , "  return ()"
+  , ""
   , "data Exn = Exn " ++ derives
   , "data Position = Position FilePath Int Int " ++ derives
   , "data Int64 = Int64 " ++ derives
@@ -88,19 +105,11 @@ haskellCIL types = unlines
   ]
   where
   derives = "deriving (Show, Read, Eq) {-! derive : Parse !-}"
-  fType :: String -> Type -> String
+  fType :: String -> TypeDef -> String
   fType name t = case t of
     Sum    constructors -> intercalate " | " [ constructorName name ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ] | (name, args) <- constructors ]
     Record fields -> printf "%s { %s }" (cap name) $ intercalate ", " [ printf "%s :: %s" field (fTypeRef tr) | (field, tr) <- fields ]
     Alias  tr     -> fTypeRef tr
-
-  constructorName :: String -> String
-  constructorName a = case a of
-    "Block"   -> "Block'"
-    "True"    -> "True'"
-    "False"   -> "False'"
-    "Nothing" -> "Nothing'"
-    a         -> cap a
 
   fTypeRef :: TypeRef -> String
   fTypeRef a = case a of
@@ -114,64 +123,32 @@ haskellCIL types = unlines
     name (Var n)   = cap n
     name (Param n) = n
 
+constructorName :: String -> String
+constructorName a = case a of
+  "Block"   -> "Block'"
+  "True"    -> "True'"
+  "False"   -> "False'"
+  "Nothing" -> "Nothing'"
+  a         -> cap a
+
 
 -- Frama-C 'dumpcil' plugin generation.
-dumpcilPlugin :: [(TypeName, Type)] -> String
+dumpcilPlugin :: [(TypeName, TypeDef)] -> String
 dumpcilPlugin types = unlines
   [ "open Ast"
   , "open Cil_types"
   , "open File"
   , "open Lexing"
   , "open List"
+  , "open String"
   , ""
-  , "let list a = if length a == 0 then \"[]\" else \"[\" ^ String.concat \", \" a ^ \"]\""
+  , "let list f a = \"[\" ^ concat \", \" (map f a) ^ \"]\""
   , ""
-  , "let string a = \"\\\"\" ^ a ^ \"\\\"\" (*XXX Need to process meta chars. *)"
-  , ""
-  , "let unknown_location ="
-  , "  let a = { pos_fname = \"unknown\""
-  , "          ; pos_lnum = 0"
-  , "          ; pos_bol  = 0"
-  , "          ; pos_cnum = 0"
-  , "          }"
-  , "  in (a, a)"
-  , ""
-  , "let format_fundec _ = \"Fundec\""
-  , ""
-  , "let format_location (a, _) = \"Location\" ^ \" \" ^ string a.pos_fname"
-  , "                                        ^ \" \" ^ string_of_int a.pos_lnum"
-  , "                                        ^ \" \" ^ string_of_int (a.pos_cnum - a.pos_bol + 1)"
-  , ""
-  , "let unknown_global loc = \"UnknownGlobal (\" ^ format_location loc ^ \")\""
-  , ""
-  , "let format_global a = match a with"
-  , "    GType        (a, loc)    -> unknown_global loc"
-  , "  | GCompTag     (a, loc)    -> unknown_global loc"
-  , "  | GCompTagDecl (a, loc)    -> unknown_global loc"
-  , "  | GEnumTag     (a, loc)    -> unknown_global loc"
-  , "  | GEnumTagDecl (a, loc)    -> unknown_global loc"
-  , "  | GVarDecl     (f, v, loc) -> unknown_global loc"
-  , "  | GVar         (v, i, loc) -> unknown_global loc"
-  , "  | GFun         (a, loc)    -> \"GFun (\" ^ format_fundec a ^ \") (\" ^ format_location loc ^ \")\""
-  , "  | GAsm         (_, loc)    -> unknown_global loc"
-  , "  | GPragma      (a, loc)    -> unknown_global loc"
-  , "  | GText        _           -> unknown_global unknown_location"
-  , "  | GAnnot       (_, loc)    -> unknown_global loc"
-  , ""
-  , ""
-  , "let format_file file ="
-  , "  let globals = map format_global file.globals in"
-  , "  \"File\""
-  , "  ^ \" \" ^ string file.fileName"
-  , "  ^ \" \" ^ list (map format_global file.globals)"
-  , "  ^ \" \" ^ (match file.globinit with"
-  , "            None   -> \"Nothing\""
-  , "          | Some f -> \"(Just (\" ^ format_fundec f ^ \"))\")"
-  , "  ^ \" \" ^ (if file.globinitcalled then \"True\" else \"False\")"
+  , "let rec " ++ intercalate "\nand " (map fType types)
   , ""
   , "let run () ="
   , "  File.init_from_cmdline ();"
-  , "  print_endline (format_file (Ast.get ()))"
+  , "  print_endline (file (Ast.get ()))"
   , ""
   , "module Self ="
   , "  Plugin.Register"
@@ -190,10 +167,40 @@ dumpcilPlugin types = unlines
   , ""
   , "let () = Db.Main.extend (fun () -> if Enabled.get () then run ())"
   ]
+  where
+  fType :: (TypeName, TypeDef) -> String
+  fType (TypeName name args, t) = name ++ " t = " ++ case t of
+    --Sum constructors -> "match t with " ++ intercalate " | " [ name ++ (if null args then "" else " (" ++ intercalate ", " [ ] (
+    --Record
+    Alias t -> fTypeRef "t" t
+    _ -> show "XXX"
+
+  fTypeRef :: String -> TypeRef -> String
+  fTypeRef m a = case a of
+    Apply a [] -> match (name a) [("a", "a")]
+    --Apply (Var "list")   [a] -> show $ "[" ++ fTypeRef a ++ "]"
+    Apply (Var "option") [a] -> match m [("None", show "Nothing"), ("Some a", show "Just" ++ " ^ (" ++ fTypeRef "a" a ++ ")")]
+    Apply (Var "ref")    [a] -> fTypeRef m a
+    --Apply a args -> name a ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ]
+    --Tuple args   -> "(" ++ intercalate ", " (map fTypeRef args) ++ ")"
+    _ -> show "XXX"
+    where
+    name (Var n)   = n
+    name (Param n) = n
+
+  match :: String -> [(String, String)] -> String
+  match expr matches = "(match " ++ expr ++ " with " ++ intercalate " | " [ a ++ " -> " ++ b | (a, b) <- matches ] ++ ")"
 
 
-
-
+-- | Makefile used to install the dumpcil plugin.
+dumpcilMakefile :: String
+dumpcilMakefile = unlines
+  [ "FRAMAC_SHARE  :=$(shell frama-c.byte -print-path)"
+  , "FRAMAC_LIBDIR :=$(shell frama-c.byte -print-libpath)"
+  , "PLUGIN_NAME = Dumpcil"
+  , "PLUGIN_CMO  = dump_cil"
+  , "include $(FRAMAC_SHARE)/Makefile.dynamic"
+  ]
 
 
 
@@ -267,7 +274,7 @@ decomment = decomment' 0
 
 type OCaml a = Parser Token a
 
-parseOCaml :: String -> [(TypeName, Type)]
+parseOCaml :: String -> [(TypeName, TypeDef)]
 parseOCaml a = case runParser (many typeDef `discard` eof) $ lexer a of
   (Left msg, remaining) -> error $ msg ++ "\nremaining tokens: " ++ show (take 30 $ remaining) ++ " ..."
   (Right a, []) -> a
@@ -297,7 +304,7 @@ variable = do
     Variable s -> return s
     _ -> undefined
 
-typeDef :: OCaml (TypeName, Type)
+typeDef :: OCaml (TypeName, TypeDef)
 typeDef = do { tok Type; n <- typeName; tok Eq; e <- typeExpr; return (n, e) }
 
 typeName :: OCaml TypeName
@@ -327,7 +334,7 @@ typeRef = oneOf
   apply args [a] = Apply a args
   apply args (a:b) = apply [(apply args [a])] b
 
-typeExpr :: OCaml Type
+typeExpr :: OCaml TypeDef
 typeExpr = oneOf
   [ recordType >>= return . Record
   , sumType    >>= return . Sum
