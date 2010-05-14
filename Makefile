@@ -1,11 +1,8 @@
 .PHONY: all
 all: Language/CIL.hs
 
-gencil: GenCIL.hs
-	ghc --make -W -fglasgow-exts -o gencil GenCIL.hs
-
-CIL.hs: gencil
-	./gencil
+CIL.hs: GenCIL.hs
+	runhaskell -W GenCIL.hs
 
 Language/CIL.hs: CIL.hs
 	mkdir -p Language && cp CIL.hs Language/CIL.hs
@@ -20,9 +17,8 @@ clean:
 	-rm *.o *.hi
 	-rm Language/*.o Language/*.hi
 	-rm test
-	-rm gencil
 	-rm cil_types_nocomments.mli
 	-rm CIL.hs
-	-rm Language/CIL.hs
+	-rm -r Language
 	-rm -rf install-dumpcil-plugin
 
