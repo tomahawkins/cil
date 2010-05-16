@@ -2,7 +2,7 @@
 module Main (main) where
 
 import Data.Char
-import Data.List
+import Data.List hiding (group)
 import System.Process
 import Text.ParserCombinators.Poly.Plain
 import Text.Printf
@@ -22,32 +22,26 @@ main = do
 
 -- Type definitions.
 data TypeDef
-  = Sum    [(String, [TypeRef])]
-  | Record [(String, TypeRef)]
-  | Alias  TypeRef
+  = Sum    [(String, [TypeApply])]
+  | Record [(String, TypeApply)]
+  | Alias  TypeApply
   deriving (Show, Eq)
 
 --- Type definition name with parameters.
 data TypeName = TypeName String [String] deriving (Show, Eq)
 
 -- Type references.  Either type applications or tuples.
-data TypeRef
-  = Apply VarParam [TypeRef]
-  | Tuple [TypeRef]
+data TypeApply = TypeApply VarPar [TypeApply]
   deriving (Show, Eq)
 
 -- Type variables or parameters.
-data VarParam = Var String | Param String deriving (Show, Eq)
+data VarPar = Var String | Par String deriving (Show, Eq)
 
 
 
 cap :: String -> String
 cap [] = []
 cap (a:b) = toUpper a : b
-
-uncap :: String -> String
-uncap [] = []
-uncap (a:b) = toLower a : b
 
 isAlias :: TypeDef -> Bool
 isAlias (Alias _) = True
@@ -114,21 +108,21 @@ haskellCIL types = unlines
   derives = "deriving (Show, Read, Eq) {-! derive : Parse !-}"
   fType :: String -> TypeDef -> String
   fType name t = case t of
-    Sum    constructors -> intercalate " | " [ constructorName name ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ] | (name, args) <- constructors ]
-    Record fields -> printf "%s { %s }" (cap name) $ intercalate ", " [ printf "%s :: %s" field (fTypeRef tr) | (field, tr) <- fields ]
-    Alias  tr     -> fTypeRef tr
+    Sum    constructors -> intercalate " | " [ constructorName name ++ concat [ " " ++ group (fTypeApply t) | t <- args ] | (name, args) <- constructors ]
+    Record fields -> printf "%s { %s }" (cap name) $ intercalate ", " [ printf "%s :: %s" field (fTypeApply tr) | (field, tr) <- fields ]
+    Alias  tr     -> fTypeApply tr
 
-  fTypeRef :: TypeRef -> String
-  fTypeRef a = case a of
-    Apply a []   -> name a
-    Apply (Var "list")   [a] -> "[" ++ fTypeRef a ++ "]"
-    Apply (Var "option") [a] -> "Maybe (" ++ fTypeRef a ++ ")"
-    Apply (Var "ref")    [a] -> fTypeRef a
-    Apply a args -> name a ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ]
-    Tuple args   -> "(" ++ intercalate ", " (map fTypeRef args) ++ ")"
+  fTypeApply :: TypeApply -> String
+  fTypeApply a = case a of
+    TypeApply a []   -> name a
+    TypeApply (Var "list")   [a] -> "[" ++ fTypeApply a ++ "]"
+    TypeApply (Var "option") [a] -> "Maybe " ++ group (fTypeApply a)
+    TypeApply (Var "ref")    [a] -> fTypeApply a
+    TypeApply (Var "tuple") args -> group $ intercalate ", " (map fTypeApply args)
+    TypeApply a args -> name a ++ concat [ " (" ++ fTypeApply t ++ ")" | t <- args ]
     where
-    name (Var n)   = cap n
-    name (Param n) = n
+    name (Var n) = cap n
+    name (Par n) = n
 
 constructorName :: String -> String
 constructorName a = case a of
@@ -149,8 +143,8 @@ dumpcilPlugin types = unlines
   , "open List"
   , "open String"
   , ""
-  , "let list f a = \"[\" ^ concat \", \" (map f a) ^ \"]\""
   , "let string a = \"\\\"\" ^ a ^ \"\\\"\" (* XXX Doesn't handle '\\' or '\"' chars in string. *)"
+  , "let bool a = if a then \"True\" else \"False\""
   , "let position t = \"Position \\\"\" ^ t.pos_fname ^ \"\\\" \" ^ string_of_int t.pos_lnum ^ \" \" ^ string_of_int (t.pos_cnum - t.pos_bol + 1)"
   , ""
   , "let rec " ++ intercalate "\nand " (map fType types)
@@ -178,34 +172,42 @@ dumpcilPlugin types = unlines
   ]
   where
   fType :: (TypeName, TypeDef) -> String
-  fType (TypeName name args, t) = name ++ " t = " ++ case t of
-    --Sum constructors -> "match t with " ++ intercalate " | " [ name ++ (if null args then "" else " (" ++ intercalate ", " [ ] (
-    --Record
-    Alias t -> fTypeRef "t" t
-    _ -> show "XXX fType"
+  fType (TypeName name args, m) = name ++ concatMap (" " ++) args ++ " m = " ++ case m of  -- Parametric types are passed formating functions for each of the parameters.
+    Sum constructors -> function (map constructor constructors) ++ " m"
+    Record fields -> "\"" ++ cap name ++ " { " ++ concat (map field fields) ++ " }\""
+    Alias m -> fTypeApply m ++ " m"
 
-  fTypeRef :: String -> TypeRef -> String
-  fTypeRef m a = case a of
-    Apply a [] -> name a ++ " " ++ m
-    --Apply (Var "list")   [a] -> show $ "[" ++ fTypeRef a ++ "]"
-    Apply (Var "option") [a] -> match' [("None", show "Nothing"), ("Some a", show "Just" ++ " ^ (" ++ fTypeRef "a" a ++ ")")]
-    Apply (Var "ref")    [a] -> fTypeRef m a
-    --Apply a args -> name a ++ concat [ " (" ++ fTypeRef t ++ ")" | t <- args ]
-    Tuple args -> match' [("(" ++ intercalate ", " [ "a" ++ show i | i <- [1 .. length args] ] ++ ")", metaGroup $ intercalate " ^ \",\" ^ " [ fTypeRef ("a" ++ show i) a | (a, i) <- zip args [1..] ])]
-    _ -> show "XXX fTypeRef"
+  constructor :: (String, [TypeApply]) -> (String, String)
+  constructor (name, [])   = (name, show $ cap name)
+  constructor (name, [m])  = (name ++ " m1", show (constructorName name) ++ " ^ " ++ fTypeApply m ++ " m1")
+  constructor (name, args) = (name ++ group (intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ]), show (constructorName name) ++ concat [ " ^ \" \" ^ " ++ fTypeApply m ++ " m" ++ show i | (m, i) <- zip args [1..] ])
+
+  field :: (String, TypeApply) -> String
+  field (name, t) = name ++ " = " ++ "\" ^ " ++ fTypeApply t ++ " m." ++ name ++ " ^ \""
+
+  -- Returns an OCaml function :: Data -> String
+  fTypeApply :: TypeApply -> String
+  fTypeApply m = case m of
+    TypeApply (Var "int")    [] -> "string_of_int"
+    TypeApply (Var "exn")    [] -> "(fun _ -> \"Exn\")"
+    TypeApply m [] -> name m  -- Vars are top level functions, Params should be functions passed in and thus in scope.
+    TypeApply (Var "list")   [m] -> function [("m", "\"[\" ^ concat \", \" (map " ++ group (fTypeApply m) ++ " m) ^ \"]\"")]
+    TypeApply (Var "option") [m] -> function [("None", show "Nothing"), ("Some m", show "Just " ++ " ^ " ++ group (fTypeApply m) ++ " m")]
+    TypeApply (Var "ref")    [m] -> fTypeApply m
+    TypeApply (Var "tuple") args -> function [(group $ intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ], metaGroup $ intercalate " ^ \",\" ^ " [ group (fTypeApply m) ++ " m" ++ show i | (m, i) <- zip args [1..] ])]
+    TypeApply m args -> group $ name m ++ concatMap ((" " ++) . group . fTypeApply) args
     where
-    name (Var n)   = n
-    name (Param n) = n
-    match' = match m
+    name (Var n) = n
+    name (Par n) = n
 
-  match :: String -> [(String, String)] -> String
-  match expr matches = group $ "match " ++ expr ++ " with " ++ intercalate " | " [ a ++ " -> " ++ b | (a, b) <- matches ]
+  function :: [(String, String)] -> String
+  function matches = group $ "function " ++ intercalate " | " [ a ++ " -> " ++ b | (a, b) <- matches ]
 
-  group :: String -> String
-  group a = "(" ++ a ++ ")"
+group :: String -> String
+group a = "(" ++ a ++ ")"
 
-  metaGroup :: String -> String
-  metaGroup a = "\"(\" ^ " ++ a ++ " ^ \")\""
+metaGroup :: String -> String
+metaGroup a = "\"(\" ^ " ++ a ++ " ^ \")\""
 
 
 -- | Makefile used to install the dumpcil plugin.
@@ -235,7 +237,7 @@ data Token
   | ParenRight
   | BraceLeft
   | BraceRight
-  | TConstructor String
+  | Constructor String
   | Variable    String
   | Parameter   String
   deriving (Show, Eq)
@@ -265,7 +267,7 @@ lexer = map t . filter (/= "mutable") . filter (not . null) . concatMap split . 
     "}"    -> BraceRight
     '\'':a -> Parameter a
     a | elem '.' a -> t $ tail $ dropWhile (/= '.') a
-    a:b    | isUpper a -> TConstructor (a : b)
+    a:b    | isUpper a -> Constructor (a : b)
            | otherwise -> Variable    (a : b)
     a      -> error $ "unexpected string: " ++ a
 
@@ -308,9 +310,9 @@ parameter = do
 
 constructor :: OCaml String
 constructor = do
-  a <- satisfy (\ a -> case a of { TConstructor _ -> True; _ -> False })
+  a <- satisfy (\ a -> case a of { Constructor _ -> True; _ -> False })
   case a of
-    TConstructor s -> return s
+    Constructor s -> return s
     _ -> undefined
 
 variable :: OCaml String
@@ -325,51 +327,51 @@ typeDef = do { tok Type; n <- typeName; tok Eq; e <- typeExpr; return (n, e) }
 
 typeName :: OCaml TypeName
 typeName = oneOf
-  [ do { tok ParenLeft; p1 <- parameter; tok Comma; p2 <- parameter; ps <- many (tok Comma >> parameter); tok ParenRight; n <- variable; return $ TypeName n (p1:p2:ps) }
+  [ do { tok ParenLeft; a <- parameter; b <- many1 (tok Comma >> parameter); tok ParenRight; n <- variable; return $ TypeName n $ a : b }
   , do { p <- parameter; n <- variable; return $ TypeName n [p] }
   , do { n <- variable; return $ TypeName n [] }
   ]
 
-varParams :: OCaml [VarParam]
-varParams = do { a <- varParam; b <- many varParam;  return $ a : b }
+varPars :: OCaml [VarPar]
+varPars = do { a <- varPar; b <- many varPar;  return $ a : b }
   where
-  varParam :: OCaml VarParam
-  varParam = oneOf [variable >>= return . Var, parameter >>= return . Param]
+  varPar :: OCaml VarPar
+  varPar = oneOf [variable >>= return . Var, parameter >>= return . Par]
 
-typeRef :: OCaml TypeRef
-typeRef = oneOf
-  [ do { tok ParenLeft; a <- varParams; tok Comma; b <- varParams; c <- many (tok Comma >> varParams); tok ParenRight; d <- varParams; return $ apply (map (apply []) (a : b: c)) d }
-  , do { tok ParenLeft; a <- typeRef; tok ParenRight; b <- varParams; return $ apply [a] b }
-  , do { tok ParenLeft; a <- typeRef; tok ParenRight; return a }
-  , do { a <- varParams; tok Star; b <- typeRef; c <- many (tok Star >> typeRef); return $ Tuple $  apply [] a : b : c }
-  , do { a <- varParams; return $ apply [] a }
+typeApply :: OCaml TypeApply
+typeApply = oneOf
+  [ do { tok ParenLeft; a <- varPars; b <- many1 (tok Comma >> varPars); tok ParenRight; c <- varPars; return $ apply (map (apply []) (a : b)) c }
+  , do { tok ParenLeft; a <- typeApply; tok ParenRight; b <- varPars; return $ apply [a] b }
+  , do { tok ParenLeft; a <- typeApply; tok ParenRight; return a }
+  , do { a <- varPars; b <- many1 (tok Star >> typeApply); return $ TypeApply (Var "tuple") $ apply [] a : b }
+  , do { a <- varPars; return $ apply [] a }
   ]
   where
-  apply :: [TypeRef] -> [VarParam] -> TypeRef
-  apply _ [] = error "typeRef.apply: no type to apply to"
-  apply args [a] = Apply a args
+  apply :: [TypeApply] -> [VarPar] -> TypeApply
+  apply _ [] = error "typeApply: no type to apply to"
+  apply args [a] = TypeApply a args
   apply args (a:b) = apply [(apply args [a])] b
 
 typeExpr :: OCaml TypeDef
 typeExpr = oneOf
   [ recordType >>= return . Record
   , sumType    >>= return . Sum
-  , typeRef    >>= return . Alias
+  , typeApply  >>= return . Alias
   ]
 
-recordType :: OCaml [(String, TypeRef)]
+recordType :: OCaml [(String, TypeApply)]
 recordType = do { tok BraceLeft; f  <- recordField; fs <- many (tok SemiColon >> recordField); optional $ tok SemiColon; tok BraceRight; return $ f : fs }
 
-recordField :: OCaml (String, TypeRef)
-recordField = do { n <- variable; tok Colon; t <- typeRef; return (n, t) }
+recordField :: OCaml (String, TypeApply)
+recordField = do { n <- variable; tok Colon; t <- typeApply; return (n, t) }
 
-sumType :: OCaml [(String, [TypeRef])]
+sumType :: OCaml [(String, [TypeApply])]
 sumType = do { optional (tok Pipe); a <- sumConstructor; b <- many (tok Pipe >> sumConstructor); return $ a : b }
  
-sumConstructor :: OCaml (String, [TypeRef])
+sumConstructor :: OCaml (String, [TypeApply])
 sumConstructor = oneOf
-  [ do { n <- constructor; tok Of; a <- typeRef; tok Star; b <- typeRef; c <- many (tok Star >> typeRef); return (n, a:b:c) }
-  , do { n <- constructor; tok Of; a <- typeRef; return (n, [a]) }
+  [ do { n <- constructor; tok Of; a <- typeApply; b <- many1 (tok Star >> typeApply); return (n, a:b) }
+  , do { n <- constructor; tok Of; a <- typeApply; return (n, [a]) }
   , do { n <- constructor; return (n, []) }
   ]
 
