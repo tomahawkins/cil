@@ -31,7 +31,9 @@ data TypeDef
 data TypeName = TypeName String [String] deriving (Show, Eq)
 
 -- Type references.  Either type applications or tuples.
-data TypeApply = TypeApply VarPar [TypeApply]
+data TypeApply
+  = TypeApply VarPar [TypeApply]
+  | TypeApplyGroup TypeApply
   deriving (Show, Eq)
 
 -- Type variables or parameters.
@@ -55,6 +57,9 @@ haskellCIL types = unlines
   , "  ( parseC"
   , "  , debugParseC"
   , "  , installPlugin"
+  , "  , Exn                        (..)"
+  , "  , Position                   (..)"
+  , "  , Int64                      (..)"
   , unlines [ printf "  , %-26s %s" (cap name) (if isAlias t then "" else "(..)")  | (TypeName name _, t) <- types ]
   , "  )"
   , "  where"
@@ -85,7 +90,7 @@ haskellCIL types = unlines
   --     (Right f, _) ->  return f
   --   ExitFailure _ -> putStrLn err >> exitWith exitCode
   -- -}
-  , " -- | Installs Frama-C '-dumpcil' plugin."
+  , " -- | Installs Frama-C '-dumpcil' plugin.  Creates 'install-dumpcil-pluging' directory, deposits a Makefile and dump_cil.ml, then runs 'make' and 'make install'."
   , "installPlugin :: IO ()"
   , "installPlugin = do"
   , "  putStrLn \"creating install-dumpcil-plugin directory for plugin compiling and installation ...\""
@@ -120,6 +125,7 @@ haskellCIL types = unlines
     TypeApply (Var "ref")    [a] -> fTypeApply a
     TypeApply (Var "tuple") args -> group $ intercalate ", " (map fTypeApply args)
     TypeApply a args -> name a ++ concat [ " (" ++ fTypeApply t ++ ")" | t <- args ]
+    TypeApplyGroup a -> fTypeApply a
     where
     name (Var n) = cap n
     name (Par n) = n
@@ -142,10 +148,16 @@ dumpcilPlugin types = unlines
   , "open Lexing"
   , "open List"
   , "open String"
+  , "open Int64"
+  , "open Char"
   , ""
   , "let string a = \"\\\"\" ^ a ^ \"\\\"\" (* XXX Doesn't handle '\\' or '\"' chars in string. *)"
-  , "let bool a = if a then \"True\" else \"False\""
   , "let position t = \"Position \\\"\" ^ t.pos_fname ^ \"\\\" \" ^ string_of_int t.pos_lnum ^ \" \" ^ string_of_int (t.pos_cnum - t.pos_bol + 1)"
+  , "let bool a = if a then \"True\" else \"False\""
+  , "let char = Char.escaped"
+  , "let int = string_of_int"
+  , "let int64 = Int64.to_string"
+  , "let float = string_of_float"
   , ""
   , "let rec " ++ intercalate "\nand " (map fType types)
   , ""
@@ -174,13 +186,13 @@ dumpcilPlugin types = unlines
   fType :: (TypeName, TypeDef) -> String
   fType (TypeName name args, m) = name ++ concatMap (" " ++) args ++ " m = " ++ case m of  -- Parametric types are passed formating functions for each of the parameters.
     Sum constructors -> function (map constructor constructors) ++ " m"
-    Record fields -> "\"" ++ cap name ++ " { " ++ concat (map field fields) ++ " }\""
+    Record fields -> "\"" ++ cap name ++ " { " ++ intercalate ", " (map field fields) ++ " }\""
     Alias m -> fTypeApply m ++ " m"
 
   constructor :: (String, [TypeApply]) -> (String, String)
   constructor (name, [])   = (name, show $ cap name)
-  constructor (name, [m])  = (name ++ " m1", show (constructorName name) ++ " ^ " ++ fTypeApply m ++ " m1")
-  constructor (name, args) = (name ++ group (intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ]), show (constructorName name) ++ concat [ " ^ \" \" ^ " ++ fTypeApply m ++ " m" ++ show i | (m, i) <- zip args [1..] ])
+  constructor (name, [m])  = (name ++ " m1", show (constructorName name) ++ " ^ \" \" ^ " ++ fTypeApply m ++ " m1")
+  constructor (name, args) = (name ++ " " ++ group (intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ]), show (constructorName name) ++ concat [ " ^ \" \" ^ " ++ metaGroup (fTypeApply m ++ " m" ++ show i) | (m, i) <- zip args [1..] ])
 
   field :: (String, TypeApply) -> String
   field (name, t) = name ++ " = " ++ "\" ^ " ++ fTypeApply t ++ " m." ++ name ++ " ^ \""
@@ -188,14 +200,14 @@ dumpcilPlugin types = unlines
   -- Returns an OCaml function :: Data -> String
   fTypeApply :: TypeApply -> String
   fTypeApply m = case m of
-    TypeApply (Var "int")    [] -> "string_of_int"
     TypeApply (Var "exn")    [] -> "(fun _ -> \"Exn\")"
     TypeApply m [] -> name m  -- Vars are top level functions, Params should be functions passed in and thus in scope.
-    TypeApply (Var "list")   [m] -> function [("m", "\"[\" ^ concat \", \" (map " ++ group (fTypeApply m) ++ " m) ^ \"]\"")]
-    TypeApply (Var "option") [m] -> function [("None", show "Nothing"), ("Some m", show "Just " ++ " ^ " ++ group (fTypeApply m) ++ " m")]
-    TypeApply (Var "ref")    [m] -> fTypeApply m
-    TypeApply (Var "tuple") args -> function [(group $ intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ], metaGroup $ intercalate " ^ \",\" ^ " [ group (fTypeApply m) ++ " m" ++ show i | (m, i) <- zip args [1..] ])]
-    TypeApply m args -> group $ name m ++ concatMap ((" " ++) . group . fTypeApply) args
+    TypeApply (Var "list")   [m] -> function [("m", "\"[ \" ^ concat \", \" (map " ++ group (fTypeApply m) ++ " m) ^ \" ]\"")]
+    TypeApply (Var "option") [m] -> function [("None", show "Nothing"), ("Some m", show "Just " ++ " ^ " ++ metaGroup (fTypeApply m ++ " m"))]
+    TypeApply (Var "ref")    [m] -> function [("m", metaGroup (fTypeApply m ++ " (!m)"))]
+    TypeApply (Var "tuple") args -> function [(group $ intercalate ", " [ "m" ++ show i | i <- [1 .. length args] ], metaGroup $ intercalate " ^ \", \" ^ " [ metaGroup (fTypeApply m ++ " m" ++ show i) | (m, i) <- zip args [1..] ])]
+    TypeApply m args -> function [("m", metaGroup (name m ++ concat [ " " ++ function [("m", metaGroup (fTypeApply arg ++ " m"))] | arg <- args ] ++ " m"))]
+    TypeApplyGroup a -> fTypeApply a
     where
     name (Var n) = n
     name (Par n) = n
@@ -207,7 +219,7 @@ group :: String -> String
 group a = "(" ++ a ++ ")"
 
 metaGroup :: String -> String
-metaGroup a = "\"(\" ^ " ++ a ++ " ^ \")\""
+metaGroup a = group $ "\"(\" ^ " ++ a ++ " ^ \")\""
 
 
 -- | Makefile used to install the dumpcil plugin.
@@ -340,10 +352,11 @@ varPars = do { a <- varPar; b <- many varPar;  return $ a : b }
 
 typeApply :: OCaml TypeApply
 typeApply = oneOf
-  [ do { tok ParenLeft; a <- varPars; b <- many1 (tok Comma >> varPars); tok ParenRight; c <- varPars; return $ apply (map (apply []) (a : b)) c }
-  , do { tok ParenLeft; a <- typeApply; tok ParenRight; b <- varPars; return $ apply [a] b }
-  , do { tok ParenLeft; a <- typeApply; tok ParenRight; return a }
-  , do { a <- varPars; b <- many1 (tok Star >> typeApply); return $ TypeApply (Var "tuple") $ apply [] a : b }
+  [ do { tok ParenLeft; a <- varPars; b <- many1 (tok Comma >> varPars); tok ParenRight; c <- varPars; return $ TypeApplyGroup $ apply (map (apply []) (a : b)) c }
+  , do { tok ParenLeft; a <- typeApply; tok ParenRight; b <- varPars; return $ TypeApplyGroup $ apply [a] b }
+  , do { tok ParenLeft; a <- typeApply; tok ParenRight; return $ TypeApplyGroup a }
+  -- XXX Need to prevent nested tuples.
+  , do { a <- varPars; b <- many1 (tok Star >> typeApply); return $ TypeApply (Var "tuple") $ flattenTuples $ apply [] a : b }
   , do { a <- varPars; return $ apply [] a }
   ]
   where
@@ -351,6 +364,13 @@ typeApply = oneOf
   apply _ [] = error "typeApply: no type to apply to"
   apply args [a] = TypeApply a args
   apply args (a:b) = apply [(apply args [a])] b
+
+  flattenTuples :: [TypeApply] -> [TypeApply]
+  flattenTuples = concatMap flattenTuple
+
+  flattenTuple :: TypeApply -> [TypeApply]
+  flattenTuple (TypeApply (Var "tuple") args) = args
+  flattenTuple a = [a]
 
 typeExpr :: OCaml TypeDef
 typeExpr = oneOf
@@ -370,8 +390,11 @@ sumType = do { optional (tok Pipe); a <- sumConstructor; b <- many (tok Pipe >> 
  
 sumConstructor :: OCaml (String, [TypeApply])
 sumConstructor = oneOf
-  [ do { n <- constructor; tok Of; a <- typeApply; b <- many1 (tok Star >> typeApply); return (n, a:b) }
-  , do { n <- constructor; tok Of; a <- typeApply; return (n, [a]) }
+  [ do { n <- constructor; tok Of; a <- typeApply; return (n, detuple a) }
   , do { n <- constructor; return (n, []) }
   ]
-
+  where
+  detuple :: TypeApply -> [TypeApply]
+  detuple (TypeApply (Var "tuple") args) = args
+  detuple a = [a]
+  
