@@ -22,7 +22,7 @@ cabal-version: >= 1.6
 extra-source-files:
   Makefile
   cil_types.mli
-  CILTypes.hs
+  GenCIL.hs
 
 library
     build-depends:
