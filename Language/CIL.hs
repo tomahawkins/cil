@@ -8,8 +8,10 @@ import Data.ByteString (ByteString)
 import Language.C hiding (Name)
 import Language.C.Data.Ident
 
+-- | Identifiers.
 type Name = String
 
+-- | Types.
 data Type
   = Void
   | Array Int Type
@@ -31,10 +33,13 @@ data Type
   | Double
   deriving (Show, Eq)
 
+-- | Statements.
 data Stmt
   = Null
   | Compound [Name] [Stmt] Position
   | TypeDecl Name Type Position
+  | VariableDef Name Type (Maybe ()) Position
+  | FunctionDef Name Type [(Name, Type)] Stmt Position
   deriving (Show, Eq)
 
 instance Pos Stmt where
@@ -42,6 +47,8 @@ instance Pos Stmt where
     Null           -> undefined
     Compound _ _ p -> p
     TypeDecl _ _ p -> p
+    VariableDef _ _ _ p -> p
+    FunctionDef _ _ _ _ p -> p
 
 -- | Parses a CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
@@ -70,6 +77,11 @@ cStat :: CStat -> Stmt
 cStat a = case a of
   CLabel i a [] _ -> Compound [name i] [cStat a] p
   CCompound ids items _ -> Compound (map name ids) (map cBlockItem items) p
+  CExpr _ _ -> Null --XXX
+  CReturn _ _ -> Null --XXX
+  CWhile _ _ False _ -> Null --XXX
+  CSwitch _ _ _ -> Null --XXX
+  CIf _ _ _ _ -> Null --XXX
   _ -> notSupported a "statement"
   where
   p = posOf a
@@ -84,7 +96,9 @@ cDecl :: CDecl -> Stmt
 cDecl a = case a of
   CDecl [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (structOrBitField decls) p
   CDecl [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (Union  $ map field decls) p
-  CDecl _ [(Just (CDeclr _ [CFunDeclr _ _ _ ] _ _ _), _, _)] _ -> Null  -- Ignore function prototypes.
+  CDecl _ [(Just (CDeclr _ (CFunDeclr _ _ _ : _) _ _ _), _, _)] _ -> Null  -- Ignore function prototypes.
+  CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _ -> VariableDef name (cDeclType a) Nothing p
+  CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Just _ , Nothing)] _ -> VariableDef name (cDeclType a) Nothing p  --XXX No initializer.
   _ -> notSupported a "declaration"
   where
   p = posOf a
@@ -125,7 +139,8 @@ cDeclSpec a = case a of
   [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef name
   [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef  name
   CTypeQual (CVolatQual _) : a -> Volatile $ cDeclSpec a
-  CStorageSpec _ : a -> cDeclSpec a  -- Ignore storage specs.
+  CTypeQual _              : a -> cDeclSpec a  -- Ignore other type qualifiers.
+  CStorageSpec _           : a -> cDeclSpec a  -- Ignore storage specs.
   CTypeSpec (CSignedType _) : a -> cDeclSpec a
   CTypeSpec (CUnsigType _)  : a -> case cDeclSpec a of
     Int8  -> Word8
@@ -152,7 +167,9 @@ cDerivedDeclr a t = case a of
   isVolatile _              = False
 
 cFunDef :: CFunDef -> Stmt
+cFunDef (CFunDef specs (CDeclr (Just (Ident name _ _)) (CFunDeclr (Right (args, False)) [] _ : rest) Nothing [] _) [] stat n) = FunctionDef name (cDeclSpec specs) [] (cStat stat) (posOf n) --XXX args
 cFunDef a = notSupported a "function"
+-- FunctionDecl Type Name [Type] Stmt Position
 
 err :: (Pretty a, Pos a) => a -> String -> b
 err a m = error $ position a ++ ": " ++ m ++ ": " ++ show (pretty a)
