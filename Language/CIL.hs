@@ -2,9 +2,11 @@ module Language.CIL
   ( Stmt (..)
   , Type (..)
   , parseCIL
+  , position
   ) where
 
 import Data.ByteString (ByteString)
+import Data.List
 import Language.C hiding (Name)
 import Language.C.Data.Ident
 
@@ -44,7 +46,22 @@ data Stmt
   | TypeDecl Name Type Position
   | VariableDef Name Type (Maybe ()) Position
   | FunctionDef Name Type [(Name, Type)] Stmt Position
+  | Assign AssignExpr Expr Position
+  | StmtApply Apply Position
   deriving (Show, Eq)
+
+-- | Expressions.
+data Expr
+  = Expr
+  deriving (Show, Eq)
+
+-- | Assignment expressions (aka. lvalues).
+data AssignExpr
+  = AssignExpr
+  deriving (Show, Eq)
+
+-- | Function application.
+data Apply = Apply Expr [Expr] deriving (Show, Eq)
 
 instance Pos Stmt where
   posOf a = case a of
@@ -53,6 +70,8 @@ instance Pos Stmt where
     TypeDecl _ _ p -> p
     VariableDef _ _ _ p -> p
     FunctionDef _ _ _ _ p -> p
+    Assign _ _ p -> p
+    StmtApply _ p -> p
 
 -- | Parses a CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
@@ -81,14 +100,45 @@ cStat :: CStat -> Stmt
 cStat a = case a of
   CLabel i a [] _ -> Compound [name i] [cStat a] p
   CCompound ids items _ -> Compound (map name ids) (map cBlockItem items) p
-  CExpr _ _ -> Null --XXX
   CReturn _ _ -> Null --XXX
   CWhile _ _ False _ -> Null --XXX
   CSwitch _ _ _ -> Null --XXX
   CIf _ _ _ _ -> Null --XXX
+
+  CExpr Nothing _ -> Null
+  CExpr (Just (CAssign op a b n)) _ -> case op of
+    CAssignOp -> Assign (assignExpr a) (cExpr b) $ posOf n
+    CMulAssOp -> f CMulOp
+    CDivAssOp -> f CDivOp
+    CRmdAssOp -> f CRmdOp
+    CAddAssOp -> f CAddOp
+    CSubAssOp -> f CSubOp
+    CShlAssOp -> f CShlOp
+    CShrAssOp -> f CShrOp
+    CAndAssOp -> f CAndOp
+    CXorAssOp -> f CXorOp
+    COrAssOp  -> f COrOp
+    where
+    f :: CBinaryOp -> Stmt
+    f op = cStat (CExpr (Just (CAssign CAssignOp a (CBinary op a b n) n)) n)
+
+  CExpr (Just (CCall func args _)) n -> StmtApply (Apply (cExpr func) (map cExpr args)) $ posOf n
+
+  CExpr (Just (CUnary op a n1)) n2
+    | elem op [CPreIncOp, CPostIncOp] -> cStat $ CExpr (Just (CAssign CAddAssOp a one n1)) n2
+    | elem op [CPreDecOp, CPostDecOp] -> cStat $ CExpr (Just (CAssign CSubAssOp a one n1)) n2
+    where
+    one = CConst $ CIntConst (cInteger 1) n1
+
   _ -> notSupported a "statement"
   where
   p = posOf a
+
+cExpr :: CExpr -> Expr
+cExpr _ = Expr --XXX
+
+assignExpr :: CExpr -> AssignExpr
+assignExpr _ = AssignExpr --XXX
 
 cBlockItem :: CBlockItem -> Stmt
 cBlockItem a = case a of
@@ -138,30 +188,36 @@ cDeclType a = case a of
   _ -> notSupported a "declaration type"
 
 cDeclSpec :: [CDeclSpec] -> Type
-cDeclSpec a = case a of
-  [] -> Void
-  [CTypeSpec (CVoidType _)] -> Void
-  [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef  name
-  [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef   name
-  [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _))            Nothing [] _) _)] -> EnumRef    name
-  [CTypeSpec (CTypeDef (Ident name _ _) _)]                                         -> TypedefRef name
-  CStorageSpec (CTypedef _) : a -> Typedef  $ cDeclSpec a
-  CTypeQual (CVolatQual _)  : a -> Volatile $ cDeclSpec a
-  CTypeQual _               : a -> cDeclSpec a  -- Ignore other type qualifiers.
-  CStorageSpec _            : a -> cDeclSpec a  -- Ignore storage specs.
-  CTypeSpec (CSignedType _) : a -> cDeclSpec a
-  CTypeSpec (CUnsigType _)  : a -> case cDeclSpec a of
-    Int8  -> Word8
-    Int16 -> Word16
-    Int32 -> Word32
+cDeclSpec = cDeclSpec . sortBy f
+  where
+  f (CTypeQual _) _ = LT
+  f _ (CTypeQual _) = GT
+  f _ _             = EQ
+
+  cDeclSpec a = case a of
+    [] -> notSupported' a "empty type specificationi"
+    [CTypeSpec (CVoidType _)] -> Void
+    [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef  name
+    [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef   name
+    [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _))            Nothing [] _) _)] -> EnumRef    name
+    [CTypeSpec (CTypeDef (Ident name _ _) _)]                                         -> TypedefRef name
+    CStorageSpec (CTypedef _) : a -> Typedef  $ cDeclSpec a
+    CTypeQual (CVolatQual _)  : a -> Volatile $ cDeclSpec a
+    CTypeQual _               : a -> cDeclSpec a  -- Ignore other type qualifiers.
+    CStorageSpec _            : a -> cDeclSpec a  -- Ignore storage specs.
+    CTypeSpec (CSignedType _) : a -> cDeclSpec a
+    CTypeSpec (CUnsigType _)  : a -> case cDeclSpec a of
+      Int8  -> Word8
+      Int16 -> Word16
+      Int32 -> Word32
+      _ -> notSupported' a "type specification"
+    CTypeSpec (CCharType   _) : _ -> Int8
+    CTypeSpec (CShortType  _) : _ -> Int16
+    CTypeSpec (CLongType   _) : _ -> Int32
+    CTypeSpec (CIntType    _) : _ -> Int32
+    CTypeSpec (CFloatType  _) : _ -> Float
+    CTypeSpec (CDoubleType _) : _ -> Double
     _ -> notSupported' a "type specification"
-  CTypeSpec (CCharType   _) : _ -> Int8
-  CTypeSpec (CShortType  _) : _ -> Int16
-  CTypeSpec (CLongType   _) : _ -> Int32
-  CTypeSpec (CIntType    _) : _ -> Int32
-  CTypeSpec (CFloatType  _) : _ -> Float
-  CTypeSpec (CDoubleType _) : _ -> Double
-  _ -> notSupported' a "type specification"
 
 cDerivedDeclr :: CDerivedDeclr -> Type -> Type
 cDerivedDeclr a t = case a of
@@ -175,7 +231,10 @@ cDerivedDeclr a t = case a of
   isVolatile _              = False
 
 cFunDef :: CFunDef -> Stmt
-cFunDef (CFunDef specs (CDeclr (Just (Ident name _ _)) (CFunDeclr (Right (args, False)) [] _ : rest) Nothing [] _) [] stat n) = FunctionDef name (cDeclSpec specs) [] (cStat stat) (posOf n) --XXX args
+cFunDef (CFunDef specs (CDeclr (Just (Ident name _ _)) (CFunDeclr (Right (args', False)) [] _ : rest) Nothing [] _) [] stat n) = FunctionDef name (foldr cDerivedDeclr (cDeclSpec specs) rest) args (cStat stat) (posOf n)
+  where
+  args :: [(Name, Type)]
+  args = [ (name, cDeclType decl) | decl@(CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _) <- args' ]
 cFunDef a = notSupported a "function"
 -- FunctionDecl Type Name [Type] Stmt Position
 
@@ -191,6 +250,7 @@ notSupported a m = err a $ "not supported: " ++ m
 notSupported' :: Pos a => a -> String -> b
 notSupported' a m = err' a $ "not supported: " ++ m
 
+-- | Format the file position of something with ties to the orignial source, like a 'Stmt'.
 position :: Pos a => a -> String
 position a = f ++ ":" ++ show l ++ ":" ++ show c
   where
