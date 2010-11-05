@@ -48,6 +48,14 @@ data Stmt
   | FunctionDef Name Type [(Name, Type)] Stmt Position
   | Assign AssignExpr Expr Position
   | StmtApply Apply Position
+  | While Expr Stmt Position
+  | If Expr Stmt Stmt Position
+  | Return (Maybe Expr) Position
+  | Goto Name Position
+  | Break Position
+  | Switch Expr Stmt Position
+  | Case Expr Stmt Position
+  | Default Stmt Position
   deriving (Show, Eq)
 
 -- | Expressions.
@@ -65,13 +73,21 @@ data Apply = Apply Expr [Expr] deriving (Show, Eq)
 
 instance Pos Stmt where
   posOf a = case a of
-    Null           -> undefined
+    Null -> undefined
     Compound _ _ p -> p
     TypeDecl _ _ p -> p
     VariableDef _ _ _ p -> p
     FunctionDef _ _ _ _ p -> p
     Assign _ _ p -> p
     StmtApply _ p -> p
+    While _ _ p -> p
+    If _ _ _ p -> p
+    Return _ p -> p
+    Goto _ p -> p
+    Break p -> p
+    Switch _ _ p -> p
+    Case _ _ p -> p
+    Default _ p -> p
 
 -- | Parses a CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
@@ -100,10 +116,16 @@ cStat :: CStat -> Stmt
 cStat a = case a of
   CLabel i a [] _ -> Compound [name i] [cStat a] p
   CCompound ids items _ -> Compound (map name ids) (map cBlockItem items) p
-  CReturn _ _ -> Null --XXX
-  CWhile _ _ False _ -> Null --XXX
-  CSwitch _ _ _ -> Null --XXX
-  CIf _ _ _ _ -> Null --XXX
+  CReturn Nothing _ -> Return Nothing p
+  CReturn (Just a) _ -> Return (Just $ cExpr a) p
+  CGoto (Ident name _ _) _ -> Goto name p
+  CBreak _ -> Break p
+  CWhile condition stmt False         _ -> While (cExpr condition) (cStat stmt) p
+  CIf condition onTrue (Just onFalse) _ -> If (cExpr condition) (cStat onTrue) (cStat onFalse) p
+  CIf condition onTrue Nothing        _ -> If (cExpr condition) (cStat onTrue)  Null           p
+  CSwitch expr stmt _ -> Switch (cExpr expr) (cStat stmt) p
+  CCase a b _ -> Case (cExpr a) (cStat b) p
+  CDefault a _ -> Default (cStat a) p
 
   CExpr Nothing _ -> Null
   CExpr (Just (CAssign op a b n)) _ -> case op of
