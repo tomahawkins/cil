@@ -17,11 +17,15 @@ data Type
   | Array Int Type
   | Ptr Type
   | Volatile Type
+  | Typedef Type
   | Struct [(Name, Type)]
   | Union  [(Name, Type)]
+  | Enum   [(Name, Int)]
   | BitField Type [(Name, Int)]
   | StructRef  Name
   | UnionRef   Name
+  | EnumRef    Name
+  | TypedefRef Name
   | Function Type [Type]
   | Int8
   | Int16
@@ -96,6 +100,7 @@ cDecl :: CDecl -> Stmt
 cDecl a = case a of
   CDecl [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (structOrBitField decls) p
   CDecl [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (Union  $ map field decls) p
+  CDecl [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _)) (Just enums) [] _) _)] [] _ -> TypeDecl name (Enum [ (field, fromIntegral $ getCInteger i) | (Ident field _ _, Just (CConst (CIntConst i _))) <- enums ]) p
   CDecl _ [(Just (CDeclr _ (CFunDeclr _ _ _ : _) _ _ _), _, _)] _ -> Null  -- Ignore function prototypes.
   CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _ -> VariableDef name (cDeclType a) Nothing p
   CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Just _ , Nothing)] _ -> VariableDef name (cDeclType a) Nothing p  --XXX No initializer.
@@ -128,7 +133,7 @@ field a = case a of
 -- | A 'Type' from a 'CDecl'.
 cDeclType :: CDecl -> Type
 cDeclType a = case a of
-  CDecl [CTypeSpec (CVoidType _)] [] _ -> Void
+  CDecl specs [] _ -> cDeclSpec specs
   CDecl specs [(Just (CDeclr _ derived Nothing [] _), _, _)] _ -> foldr cDerivedDeclr (cDeclSpec specs) derived
   _ -> notSupported a "declaration type"
 
@@ -136,11 +141,14 @@ cDeclSpec :: [CDeclSpec] -> Type
 cDeclSpec a = case a of
   [] -> Void
   [CTypeSpec (CVoidType _)] -> Void
-  [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef name
-  [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef  name
-  CTypeQual (CVolatQual _) : a -> Volatile $ cDeclSpec a
-  CTypeQual _              : a -> cDeclSpec a  -- Ignore other type qualifiers.
-  CStorageSpec _           : a -> cDeclSpec a  -- Ignore storage specs.
+  [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef  name
+  [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef   name
+  [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _))            Nothing [] _) _)] -> EnumRef    name
+  [CTypeSpec (CTypeDef (Ident name _ _) _)]                                         -> TypedefRef name
+  CStorageSpec (CTypedef _) : a -> Typedef  $ cDeclSpec a
+  CTypeQual (CVolatQual _)  : a -> Volatile $ cDeclSpec a
+  CTypeQual _               : a -> cDeclSpec a  -- Ignore other type qualifiers.
+  CStorageSpec _            : a -> cDeclSpec a  -- Ignore storage specs.
   CTypeSpec (CSignedType _) : a -> cDeclSpec a
   CTypeSpec (CUnsigType _)  : a -> case cDeclSpec a of
     Int8  -> Word8
