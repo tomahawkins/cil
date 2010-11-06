@@ -267,17 +267,6 @@ cExpr a = case a of
   where
   p = posOf a
 
-{-
-assignExpr :: CExpr -> AssignExpr
-assignExpr a = case a of
-  CVar (Ident name _ _) _ -> AssignExpr
-  CUnary CIndOp a _ -> AssignExpr  -- a could be any pointer expression.
-  CIndex a b _ -> assignExpr a
-  CMember a (Ident name _ _) False _ -> assignExpr a  -- a.b
-  CMember a (Ident name _ _) True  _ -> AssignExpr  -- a->b   a could be any pointer expression.
-  _ -> notSupported a "assignment expressions (lvalue)"
--}
-
 cBlockItem :: CBlockItem -> Stmt
 cBlockItem a = case a of
   CBlockStmt    a -> cStat   a
@@ -290,8 +279,14 @@ cDecl a = case a of
   CDecl [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (Union  $ map field decls) p
   CDecl [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _)) (Just enums) [] _) _)] [] _ -> TypeDecl name (Enum [ (field, fromIntegral $ getCInteger i) | (Ident field _ _, Just (CConst (CIntConst i _))) <- enums ]) p
   CDecl _ [(Just (CDeclr _ (CFunDeclr _ _ _ : _) _ _ _), _, _)] _ -> Null  -- Ignore function prototypes.
-  CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _ -> VariableDef name (cDeclType a) Nothing p
-  CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Just _ , Nothing)] _ -> VariableDef name (cDeclType a) Nothing p  --XXX No initializer.
+  CDecl specs [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), init , Nothing)] _
+    | any isExtern specs -> Null -- Ignore external variable decls.
+    | otherwise ->  case init of
+        Nothing   -> VariableDef name (cDeclType a) Nothing p
+        Just init -> VariableDef name (cDeclType a) Nothing p --XXX
+    where
+    isExtern (CStorageSpec (CExtern _)) = True
+    isExtern _ = False
   _ -> notSupported a "declaration"
   where
   p = posOf a
