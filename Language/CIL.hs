@@ -1,6 +1,8 @@
 module Language.CIL
-  ( Stmt (..)
+  ( Name
   , Type (..)
+  , Stmt (..)
+  , Expr (..)
   , parseCIL
   , position
   ) where
@@ -46,7 +48,7 @@ data Stmt
   | TypeDecl Name Type Position
   | VariableDef Name Type (Maybe ()) Position
   | FunctionDef Name Type [(Name, Type)] Stmt Position
-  | Assign AssignExpr Expr Position
+  | Assign Expr Expr Position
   | StmtApply Apply Position
   | While Expr Stmt Position
   | If Expr Stmt Stmt Position
@@ -60,13 +62,47 @@ data Stmt
 
 -- | Expressions.
 data Expr
-  = Expr
+  = ConstInt    Int    Position
+  | ConstFloat  Double Position
+  | ConstChar   Char   Position
+  | ConstString String Position
+  | Var    Name      Position
+  | Mul    Expr Expr Position 
+  | Div    Expr Expr Position 
+  | Rmd    Expr Expr Position 
+  | Add    Expr Expr Position 
+  | Sub    Expr Expr Position 
+  | Shl    Expr Expr Position 
+  | Shr    Expr Expr Position 
+  | Lt     Expr Expr Position 
+  | Gt     Expr Expr Position 
+  | Le     Expr Expr Position 
+  | Ge     Expr Expr Position 
+  | Eq     Expr Expr Position 
+  | Neq    Expr Expr Position 
+  | And    Expr Expr Position 
+  | Xor    Expr Expr Position 
+  | Or     Expr Expr Position 
+  | Adr    Expr      Position
+  | Ind    Expr      Position
+  | Minus  Expr      Position
+  | Comp   Expr      Position
+  | Neg    Expr      Position
+  | Cast   Type Expr Position
+  | Index  Expr Expr Position
+  | ExprApply Apply  Position
+  | Mem    Expr Name Position
+  | MemInd Expr Name Position
+  | SizeT  Type      Position
+  | SizeE  Expr      Position
   deriving (Show, Eq)
 
+{-
 -- | Assignment expressions (aka. lvalues).
 data AssignExpr
   = AssignExpr
   deriving (Show, Eq)
+-}
 
 -- | Function application.
 data Apply = Apply Expr [Expr] deriving (Show, Eq)
@@ -88,6 +124,42 @@ instance Pos Stmt where
     Switch _ _ p -> p
     Case _ _ p -> p
     Default _ p -> p
+
+instance Pos Expr where
+  posOf a = case a of
+    ConstInt   _ p -> p
+    ConstFloat _ p -> p
+    ConstChar  _ p -> p
+    ConstString _ p -> p
+    Var    _   p -> p
+    Mul    _ _ p -> p 
+    Div    _ _ p -> p 
+    Rmd    _ _ p -> p 
+    Add    _ _ p -> p 
+    Sub    _ _ p -> p 
+    Shl    _ _ p -> p 
+    Shr    _ _ p -> p 
+    Lt     _ _ p -> p 
+    Gt     _ _ p -> p 
+    Le     _ _ p -> p 
+    Ge     _ _ p -> p 
+    Eq     _ _ p -> p 
+    Neq    _ _ p -> p 
+    And    _ _ p -> p 
+    Xor    _ _ p -> p 
+    Or     _ _ p -> p 
+    Adr    _   p -> p
+    Ind    _   p -> p
+    Minus  _   p -> p
+    Comp   _   p -> p
+    Neg    _   p -> p
+    Cast   _ _ p -> p
+    Index  _ _ p -> p
+    Mem    _ _ p -> p
+    MemInd _ _ p -> p
+    SizeT  _   p -> p
+    SizeE  _   p -> p
+    ExprApply _ p -> p
 
 -- | Parses a CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
@@ -129,7 +201,7 @@ cStat a = case a of
 
   CExpr Nothing _ -> Null
   CExpr (Just (CAssign op a b n)) _ -> case op of
-    CAssignOp -> Assign (assignExpr a) (cExpr b) $ posOf n
+    CAssignOp -> Assign (cExpr a) (cExpr b) $ posOf n
     CMulAssOp -> f CMulOp
     CDivAssOp -> f CDivOp
     CRmdAssOp -> f CRmdOp
@@ -157,10 +229,54 @@ cStat a = case a of
   p = posOf a
 
 cExpr :: CExpr -> Expr
-cExpr _ = Expr --XXX
+cExpr a = case a of
+  CConst (CIntConst i _)             -> ConstInt (fromIntegral $ getCInteger i) p
+  CConst (CFloatConst (CFloat s) _)  -> ConstFloat (read s) p
+  CConst (CCharConst (CChar a _) _)  -> ConstChar   a p
+  CConst (CStrConst (CString a _) _) -> ConstString a p
+  CVar (Ident name _ _)            _ -> Var name p
+  CBinary CMulOp a b               _ -> Mul   (cExpr a) (cExpr b) p
+  CBinary CDivOp a b               _ -> Div   (cExpr a) (cExpr b) p
+  CBinary CRmdOp a b               _ -> Rmd   (cExpr a) (cExpr b) p
+  CBinary CAddOp a b               _ -> Add   (cExpr a) (cExpr b) p
+  CBinary CSubOp a b               _ -> Sub   (cExpr a) (cExpr b) p
+  CBinary CShlOp a b               _ -> Shl   (cExpr a) (cExpr b) p
+  CBinary CShrOp a b               _ -> Shr   (cExpr a) (cExpr b) p
+  CBinary CLeOp  a b               _ -> Lt    (cExpr a) (cExpr b) p
+  CBinary CGrOp  a b               _ -> Gt    (cExpr a) (cExpr b) p
+  CBinary CLeqOp a b               _ -> Le    (cExpr a) (cExpr b) p
+  CBinary CGeqOp a b               _ -> Ge    (cExpr a) (cExpr b) p
+  CBinary CEqOp  a b               _ -> Eq    (cExpr a) (cExpr b) p
+  CBinary CNeqOp a b               _ -> Neq   (cExpr a) (cExpr b) p
+  CBinary CAndOp a b               _ -> And   (cExpr a) (cExpr b) p
+  CBinary CXorOp a b               _ -> Xor   (cExpr a) (cExpr b) p
+  CBinary COrOp  a b               _ -> Or    (cExpr a) (cExpr b) p
+  CUnary CAdrOp  a                 _ -> Adr   (cExpr a) p
+  CUnary CIndOp  a                 _ -> Ind   (cExpr a) p
+  CUnary CMinOp  a                 _ -> Minus (cExpr a) p
+  CUnary CCompOp a                 _ -> Comp  (cExpr a) p
+  CUnary CNegOp  a                 _ -> Neg   (cExpr a) p
+  CCast decl a                     _ -> Cast  (cDeclType decl) (cExpr a) p
+  CIndex a b                       _ -> Index (cExpr a) (cExpr b) p
+  CCall func args                  _ -> ExprApply (Apply (cExpr func) (map cExpr args)) p
+  CMember a (Ident name _ _) False _ -> Mem    (cExpr a) name p
+  CMember a (Ident name _ _) True  _ -> MemInd (cExpr a) name p
+  CSizeofType a                    _ -> SizeT (cDeclType a) p
+  CSizeofExpr a                    _ -> SizeE (cExpr a) p
+  _ -> notSupported a "expressions"
+  where
+  p = posOf a
 
+{-
 assignExpr :: CExpr -> AssignExpr
-assignExpr _ = AssignExpr --XXX
+assignExpr a = case a of
+  CVar (Ident name _ _) _ -> AssignExpr
+  CUnary CIndOp a _ -> AssignExpr  -- a could be any pointer expression.
+  CIndex a b _ -> assignExpr a
+  CMember a (Ident name _ _) False _ -> assignExpr a  -- a.b
+  CMember a (Ident name _ _) True  _ -> AssignExpr  -- a->b   a could be any pointer expression.
+  _ -> notSupported a "assignment expressions (lvalue)"
+-}
 
 cBlockItem :: CBlockItem -> Stmt
 cBlockItem a = case a of
@@ -217,7 +333,7 @@ cDeclSpec = cDeclSpec . sortBy f
   f _ _             = EQ
 
   cDeclSpec a = case a of
-    [] -> notSupported' a "empty type specificationi"
+    [] -> notSupported' a "empty type specification"
     [CTypeSpec (CVoidType _)] -> Void
     [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) Nothing [] _) _)] -> StructRef  name
     [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) Nothing [] _) _)] -> UnionRef   name
