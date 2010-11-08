@@ -1,8 +1,18 @@
+-- | Parsing the C Intermediate Language (CIL).
+--   CIL provides a manageable means to analyze and compile C code.
+--
+--   The common method to reduce C to CIL is to use the cilly driver:
+--
+--   > cilly --merge --keepmerged { c-files-and-options }
+--
+-- <http://cil.sourceforge.net/>
 module Language.CIL
   ( Name
-  , Type (..)
-  , Stmt (..)
-  , Expr (..)
+  , Type  (..)
+  , Stmt  (..)
+  , Expr  (..)
+  , Init  (..)
+  , Apply (..)
   , parseCIL
   , position
   ) where
@@ -20,16 +30,16 @@ data Type
   = Void
   | Array Int Type
   | Ptr Type
-  | Volatile Type
+  | Volatile Type                -- ^ A volatile qualified type.
   | Typedef Type
   | Struct [(Name, Type)]
   | Union  [(Name, Type)]
   | Enum   [(Name, Int)]
   | BitField Type [(Name, Int)]
-  | StructRef  Name
-  | UnionRef   Name
-  | EnumRef    Name
-  | TypedefRef Name
+  | StructRef  Name              -- ^ Reference to a struct type.
+  | UnionRef   Name              -- ^ Reference to a union type.
+  | EnumRef    Name              -- ^ Reference to an enum type.
+  | TypedefRef Name              -- ^ Reference to a previously defined typedef.
   | Function Type [Type]
   | Int8
   | Int16
@@ -46,7 +56,7 @@ data Stmt
   = Null
   | Compound [Name] [Stmt] Position
   | TypeDecl Name Type Position
-  | VariableDef Name Type (Maybe ()) Position
+  | VariableDef Name Type (Maybe Init) Position
   | FunctionDef Name Type [(Name, Type)] Stmt Position
   | Assign Expr Expr Position
   | StmtApply Apply Position
@@ -66,43 +76,42 @@ data Expr
   | ConstFloat  Double Position
   | ConstChar   Char   Position
   | ConstString String Position
-  | Var    Name      Position
-  | Mul    Expr Expr Position 
-  | Div    Expr Expr Position 
-  | Rmd    Expr Expr Position 
-  | Add    Expr Expr Position 
-  | Sub    Expr Expr Position 
-  | Shl    Expr Expr Position 
-  | Shr    Expr Expr Position 
-  | Lt     Expr Expr Position 
-  | Gt     Expr Expr Position 
-  | Le     Expr Expr Position 
-  | Ge     Expr Expr Position 
-  | Eq     Expr Expr Position 
-  | Neq    Expr Expr Position 
-  | And    Expr Expr Position 
-  | Xor    Expr Expr Position 
-  | Or     Expr Expr Position 
-  | Adr    Expr      Position
-  | Ind    Expr      Position
-  | Minus  Expr      Position
-  | Comp   Expr      Position
-  | Neg    Expr      Position
-  | Cast   Type Expr Position
-  | Index  Expr Expr Position
-  | ExprApply Apply  Position
-  | Mem    Expr Name Position
-  | MemInd Expr Name Position
-  | SizeT  Type      Position
-  | SizeE  Expr      Position
+  | Var    Name      Position  -- ^ Variable reference.
+  | Mul    Expr Expr Position  -- ^ a * b
+  | Div    Expr Expr Position  -- ^ a / b
+  | Rmd    Expr Expr Position  -- ^ a % b
+  | Add    Expr Expr Position  -- ^ a + b
+  | Sub    Expr Expr Position  -- ^ a - b
+  | Shl    Expr Expr Position  -- ^ a << b
+  | Shr    Expr Expr Position  -- ^ a >> b
+  | Lt     Expr Expr Position  -- ^ a < b
+  | Gt     Expr Expr Position  -- ^ a > b
+  | Le     Expr Expr Position  -- ^ a <= b
+  | Ge     Expr Expr Position  -- ^ a >= b
+  | Eq     Expr Expr Position  -- ^ a == b
+  | Neq    Expr Expr Position  -- ^ a != b
+  | And    Expr Expr Position  -- ^ a & b
+  | Xor    Expr Expr Position  -- ^ a ^ b
+  | Or     Expr Expr Position  -- ^ a | b
+  | Adr    Expr      Position  -- ^ &a
+  | Ind    Expr      Position  -- ^ \*a
+  | Minus  Expr      Position  -- ^ \-a
+  | Comp   Expr      Position  -- ^ ~a
+  | Neg    Expr      Position  -- ^ !a
+  | Cast   Type Expr Position  -- ^ (...) a
+  | Index  Expr Expr Position  -- ^ a[b]
+  | ExprApply Apply  Position  -- ^ a(x, y, z)
+  | Mem    Expr Name Position  -- ^ a.name
+  | MemInd Expr Name Position  -- ^ a->name
+  | SizeT  Type      Position  -- ^ sizeof(type)
+  | SizeE  Expr      Position  -- ^ sizeof(expr)
   deriving (Show, Eq)
 
-{-
--- | Assignment expressions (aka. lvalues).
-data AssignExpr
-  = AssignExpr
+-- | Initialization expressions.
+data Init
+  = Init Expr
+  | InitList [Init]
   deriving (Show, Eq)
--}
 
 -- | Function application.
 data Apply = Apply Expr [Expr] deriving (Show, Eq)
@@ -161,7 +170,7 @@ instance Pos Expr where
     SizeE  _   p -> p
     ExprApply _ p -> p
 
--- | Parses a CIL program, given a file name and contents.
+-- | Parses a merged CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
 parseCIL name code = case parseC code (initPos name) of
     Left e  -> error $ "parsing error: " ++ show e
@@ -285,14 +294,21 @@ cDecl a = case a of
   CDecl specs [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), init , Nothing)] _
     | any isExtern specs -> Null -- Ignore external variable decls.
     | otherwise ->  case init of
-        Nothing   -> VariableDef name (cDeclType a) Nothing p
-        Just init -> VariableDef name (cDeclType a) Nothing p --XXX
+      Nothing   -> VariableDef name (cDeclType a)  Nothing            p
+      Just init -> VariableDef name (cDeclType a) (Just $ cInit init) p
     where
     isExtern (CStorageSpec (CExtern _)) = True
     isExtern _ = False
   _ -> notSupported a "declaration"
   where
   p = posOf a
+
+cInit :: CInit ->  Init
+cInit a = case a of
+  CInitExpr init _ -> Init $ cExpr init
+  CInitList a _ | all null $ fst $ unzip a -> InitList [ cInit a | ([], a) <- a ]
+  _ -> notSupported a "initializer"
+  
 
 -- | A struct or a bit field.
 structOrBitField :: [CDecl] -> Type
@@ -386,7 +402,7 @@ notSupported a m = err a $ "not supported: " ++ m
 notSupported' :: Pos a => a -> String -> b
 notSupported' a m = err' a $ "not supported: " ++ m
 
--- | Format the file position of something with ties to the orignial source, like a 'Stmt'.
+-- | Format the file position of something with ties to the orignial source, like a 'Stmt' or 'Expr'.
 position :: Pos a => a -> String
 position a = f ++ ":" ++ show l ++ ":" ++ show c
   where
