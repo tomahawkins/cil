@@ -287,9 +287,9 @@ cDecl a = case a of
   CDecl [CTypeSpec (CSUType (CStruct CStructTag (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (structOrBitField decls) p
   CDecl [CTypeSpec (CSUType (CStruct CUnionTag  (Just (Ident name _ _)) (Just decls) [] _) _)] [] _ -> TypeDecl name (Union  $ map field decls) p
   CDecl [CTypeSpec (CEnumType (CEnum (Just (Ident name _ _)) (Just enums) [] _) _)] [] _ -> TypeDecl name (Enum [ (field, fromIntegral $ getCInteger i) | (Ident field _ _, Just (CConst (CIntConst i _))) <- enums ]) p
-  CDecl (CStorageSpec (CTypedef _) : specs) a n -> TypeDecl name (Typedef $ cDeclType $ CDecl specs (init a) n) p
-    where
-    (Just (CDeclr (Just (Ident name _ _)) [] Nothing [] _), Nothing, Nothing) = last a
+  CDecl (CStorageSpec (CTypedef _) : specs) a n -> case cDecl $ CDecl specs a n of
+    VariableDef name typ Nothing _ -> TypeDecl name (Typedef typ) p
+    b -> notSupported' b $ "typedef declaration:\n" ++ show b
   CDecl _ [(Just (CDeclr _ (CFunDeclr _ _ _ : _) _ _ _), _, _)] _ -> Null  -- Ignore function prototypes.
   CDecl specs [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), init , Nothing)] _
     | any isExtern specs -> Null -- Ignore external variable decls.
