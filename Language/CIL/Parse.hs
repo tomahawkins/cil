@@ -10,6 +10,7 @@ import Language.C.Data.Ident
 
 import Language.CIL.StmtCore
 import Language.CIL.Types
+import Language.CIL.Utils
 
 -- | Parses a merged CIL program, given a file name and contents.
 parseCIL :: String -> ByteString -> Stmt
@@ -230,22 +231,4 @@ cFunDef (CFunDef specs (CDeclr (Just (Ident name _ _)) (CFunDeclr (Right (args',
   args = [ (name, cDeclType decl) | decl@(CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _) <- args' ]
 cFunDef a = notSupported a "function"
 -- FunctionDecl Type Name [Type] Stmt Position
-
-err :: (Pretty a, Pos a) => a -> String -> b
-err a m = error $ position a ++ ": " ++ m ++ ": " ++ show (pretty a)
-
-err' :: Pos a => a -> String -> b
-err' a m = error $ position a ++ ": " ++ m
-
-notSupported :: (Pretty a, Pos a) => a -> String -> b
-notSupported a m = err a $ "not supported: " ++ m
-
-notSupported' :: Pos a => a -> String -> b
-notSupported' a m = err' a $ "not supported: " ++ m
-
--- | Format the file position of something with ties to the orignial source, like a 'Stmt' or 'Expr'.
-position :: Pos a => a -> String
-position a = f ++ ":" ++ show l ++ ":" ++ show c
-  where
-  Position f l c = posOf a
 
