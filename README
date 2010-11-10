@@ -1,5 +1,5 @@
-A Haskell interface to CIL; a simplified, intermediate language of C.
-Useful for the analysis and compilation of C programs.
+A Haskell interface to CIL; a simplified, intermediate language for C.
+CIL makes a great frontend for C analysis, instrumentation, and compilation tools.
 
 http://hackage.haskell.org/package/cil
 http://cil.sourceforge.net/
@@ -7,7 +7,7 @@ http://cil.sourceforge.net/
 
 Release Notes
 
-cil 0.1.1    ???
+cil 0.1.1    11/9/10
 
 - Bugfix: typedef of function pointers.
 - Replaced ExprApply and Assign with AssignExpr and AssignApply.

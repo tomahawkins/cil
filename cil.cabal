@@ -6,8 +6,8 @@ category: Language
 synopsis: An interface to CIL.
 
 description:
-  CIL (http://cil.sourceforge.net/) is a C frontend that reduces C to a manageable subset,
-  useful for source code analyzers, instrumenters, and compilers.
+  CIL is a simplified, intermediate language for C.
+  CIL makes a great frontend for C analysis, instrumentation, and compilation tools.
 
 author:     Tom Hawkins <tomahawkins@gmail.com>
 maintainer: Tom Hawkins <tomahawkins@gmail.com>
