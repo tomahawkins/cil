@@ -7,9 +7,11 @@
 --
 -- <http://cil.sourceforge.net/>
 module Language.CIL
-  ( module Language.CIL.Parse
-  , module Language.CIL.Types
+  ( module Language.CIL.Types
+  , module Language.CIL.Parse
+  , module Language.CIL.Goto
   ) where
 
+import Language.CIL.Goto
 import Language.CIL.Parse
 import Language.CIL.Types

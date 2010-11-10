@@ -28,6 +28,7 @@ library
 
     exposed-modules:
         Language.CIL,
+        Language.CIL.Goto,
         Language.CIL.Parse,
         Language.CIL.StmtCore,
         Language.CIL.StmtGoto,
