@@ -27,7 +27,11 @@ library
         language-c    >= 0.3.2   && < 0.4
 
     exposed-modules:
-        Language.CIL
+        Language.CIL,
+        Language.CIL.Parse,
+        Language.CIL.Stmt,
+        Language.CIL.StmtGoto,
+        Language.CIL.Types
 
     extensions:
 
