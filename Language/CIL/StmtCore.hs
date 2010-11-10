@@ -1,4 +1,4 @@
-module Language.CIL.Stmt
+module Language.CIL.StmtCore
   ( Stmt  (..)
   ) where
 

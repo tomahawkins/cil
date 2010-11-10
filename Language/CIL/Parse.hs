@@ -8,7 +8,7 @@ import Data.List
 import Language.C hiding (Name)
 import Language.C.Data.Ident
 
-import Language.CIL.Stmt
+import Language.CIL.StmtCore
 import Language.CIL.Types
 
 -- | Parses a merged CIL program, given a file name and contents.
