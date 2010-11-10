@@ -1,5 +1,7 @@
-A Haskell interface to CIL.
+A Haskell interface to CIL; a simplified, intermediate language of C.
+Useful for the analysis and compilation of C programs.
 
+http://hackage.haskell.org/package/cil
 http://cil.sourceforge.net/
 
 
