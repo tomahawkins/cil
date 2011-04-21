@@ -43,7 +43,8 @@ withScope scope = do
 convert :: Stmt -> G.Stmt
 convert a = case a of
   Null -> G.Null
-  Compound labels stmts p -> G.Compound labels (map convert stmts) p
+  Label name stmt p -> G.Label name (convert stmt) p
+  Compound stmts p -> G.Compound (map convert stmts) p
   TypeDecl name typ p -> G.TypeDecl name typ p
   VariableDef name typ init p -> G.VariableDef name typ init p
   AssignExpr a b p -> G.AssignExpr a b p
@@ -60,10 +61,9 @@ reduce maxDepth callTrace a = case a of
   Goto name p -> do
     name <- label name
     return $ Goto name p
-  Compound names stmts p -> do
-    names <- mapM label names
+  Compound stmts p -> do
     stmts <- mapM (reduce maxDepth callTrace) stmts
-    return $ Compound names stmts p
+    return $ Compound stmts p
   If a b c p -> do
     b <- reduce maxDepth callTrace b
     c <- reduce maxDepth callTrace c
@@ -72,29 +72,34 @@ reduce maxDepth callTrace a = case a of
     before <- nextLabel
     after  <- nextLabel
     stmt <- reduceWhile maxDepth callTrace after stmt
-    return $ Compound [before] [If cond (Compound [] [stmt, Goto before p] p) Null p, Compound [after] [] p] p
+    return $ Label before (Compound [If cond (Compound [stmt, Goto before p] p) Null p, Label after Null p] p) p
   Break _ -> notSupported' a "break outside of loop or switch"
   Case _ _ _ -> notSupported' a "case outside of switch"
   Default _ _ -> notSupported' a "default outside of switch"
+  Switch cond stmt p -> do
+    after <- nextLabel
+    (cases, stmts) <- rewriteCases (Label after p) stmts
+  _ -> notSupported' a "statement for goto transform"
 
   {-
   FunctionDef Name Type [(Name, Type)] Stmt Position
   AssignApply Expr Apply Position
   StmtApply Apply Position
   Return (Maybe Expr) Position
-  Switch Expr Stmt Position
   -}
 
 reduceWhile :: Int -> [Name] -> Name -> Stmt -> Label Stmt
 reduceWhile maxDepth callTrace after a = case a of
   Break p -> return $ Goto after p
-  Compound names stmts p -> do
-    names <- mapM label names
+  Compound stmts p -> do
     stmts <- mapM (reduceWhile maxDepth callTrace after) stmts
-    return $ Compound names stmts p
+    return $ Compound stmts p
   If a b c p -> do
     b <- reduceWhile maxDepth callTrace after b
     c <- reduceWhile maxDepth callTrace after c
     return $ If a b c p
   a -> reduce maxDepth callTrace a
+
+rewriteCases :: Name -> [Stmt] -> ([(Expr, Name)], [Stmt])
+rewriteCases end [] = []
 

@@ -37,8 +37,9 @@ name (Ident name _ _) = name
 -- | Converts 'CStat' to 'Stmt'.
 cStat :: CStat -> Stmt
 cStat a = case a of
-  CLabel i a [] _ -> Compound [name i] [cStat a] p
-  CCompound ids items _ -> Compound (map name ids) (map cBlockItem items) p
+  CLabel i a [] _ -> Label (name i) (cStat a) p
+  CCompound [] items _ -> Compound (map cBlockItem items) p
+  CCompound (id : ids) items n -> Label (name id) (cStat $ CCompound ids items n) p
   CReturn Nothing _ -> Return Nothing p
   CReturn (Just a) _ -> Return (Just $ cExpr a) p
   CGoto (Ident name _ _) _ -> Goto name p

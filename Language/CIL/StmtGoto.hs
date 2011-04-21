@@ -9,7 +9,8 @@ import Language.CIL.Types
 -- | Statements.
 data Stmt
   = Null
-  | Compound [Name] [Stmt] Position
+  | Label Name Stmt Position
+  | Compound [Stmt] Position
   | TypeDecl Name Type Position
   | VariableDef Name Type (Maybe Init) Position
   | AssignExpr Expr Expr Position
@@ -20,7 +21,8 @@ data Stmt
 instance Pos Stmt where
   posOf a = case a of
     Null -> undefined
-    Compound _ _ p -> p
+    Label _ _ p -> p
+    Compound _ p -> p
     TypeDecl _ _ p -> p
     VariableDef _ _ _ p -> p
     AssignExpr _ _ p -> p
