@@ -24,5 +24,6 @@ notSupported' a m = err' a $ "not supported: " ++ m
 position :: Pos a => a -> String
 position a = f ++ ":" ++ show l ++ ":" ++ show c
   where
-  Position f l c = posOf a
+  (f,l,c) = (posFile p, posRow p, posColumn p)
+  p = posOf a
 
