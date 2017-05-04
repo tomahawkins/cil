@@ -76,9 +76,7 @@ reduce maxDepth callTrace a = case a of
   Break _ -> notSupported' a "break outside of loop or switch"
   Case _ _ _ -> notSupported' a "case outside of switch"
   Default _ _ -> notSupported' a "default outside of switch"
-  Switch cond stmt p -> do
-    after <- nextLabel
-    (cases, stmts) <- rewriteCases (Label after p) stmts
+  Switch cond stmt p -> notSupported' a "reduce of Switch is not supported."
   _ -> notSupported' a "statement for goto transform"
 
   {-
@@ -99,7 +97,3 @@ reduceWhile maxDepth callTrace after a = case a of
     c <- reduceWhile maxDepth callTrace after c
     return $ If a b c p
   a -> reduce maxDepth callTrace a
-
-rewriteCases :: Name -> [Stmt] -> ([(Expr, Name)], [Stmt])
-rewriteCases end [] = []
-
