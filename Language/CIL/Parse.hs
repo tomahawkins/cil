@@ -29,7 +29,7 @@ cTranslUnit (CTranslUnit items _) = CCompound [] (map f items ++ [CBlockStmt cal
   callMain :: CStat
   callMain = CExpr (Just $ CCall (CVar (Ident "main" 0 none) none) [] none) none
   none :: NodeInfo
-  none = internalNode
+  none = undefNode
 
 -- | Name of identifier.
 name :: Ident -> Name
