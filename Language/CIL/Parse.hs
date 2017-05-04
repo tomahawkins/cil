@@ -22,13 +22,14 @@ parseCIL name code = case parseC code (initPos name) of
 cTranslUnit :: CTranslUnit -> CStat
 cTranslUnit (CTranslUnit items _) = CCompound [] (map f items ++ [CBlockStmt callMain]) none
   where
+  f :: CExternalDeclaration NodeInfo -> CCompoundBlockItem NodeInfo
   f (CDeclExt a) = CBlockDecl a
   f (CFDefExt a) = CNestedFunDef a
-  f a@(CAsmExt _) = notSupported a "inline assembly"
+  f a@(CAsmExt {}) = notSupported a "inline assembly"
   callMain :: CStat
   callMain = CExpr (Just $ CCall (CVar (Ident "main" 0 none) none) [] none) none
   none :: NodeInfo
-  none = internalNode
+  none = undefNode
 
 -- | Name of identifier.
 name :: Ident -> Name
@@ -232,4 +233,3 @@ cFunDef (CFunDef specs (CDeclr (Just (Ident name _ _)) (CFunDeclr (Right (args',
   args = [ (name, cDeclType decl) | decl@(CDecl _ [(Just (CDeclr (Just (Ident name _ _)) _ Nothing [] _), Nothing, Nothing)] _) <- args' ]
 cFunDef a = notSupported a "function"
 -- FunctionDecl Type Name [Type] Stmt Position
-
